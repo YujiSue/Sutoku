@@ -1,1026 +1,304 @@
-#include "analyzer.hpp"
-
+#include "analyzer.h"
 using namespace stk;
 
-const int MAX_DIRECT_COUNT = 1<<14;
-
-varsearch::varsearch(analyzer *a) {
-    par = a->par;
-    vpar = &par->var_par;
-    cvpar = &vpar->cnv_par;
-    svpar = &vpar->srv_par;
-    ref = a->par->ref;
-    summary = a->summary;
-    background = a->par->bg;
-    threads = &a->threads;
-    
-    sr_dels.resize(ref->size());
-    sr_dups.resize(ref->size());
-    sr_indels.resize(2*ref->size());
-    
-    sr_invs.resize(3*ref->size());
-    sr_trs.resize(ref->size());
-    sr_trinvs.resize(ref->size());
-    for (int i = 0; i < ref->size(); ++i) {
-        sr_trs[i].resize(3*ref->size());
-        sr_trinvs[i].resize(3*ref->size());
-    }
-    cnan = new cnanalysis(a);
-    vlist = a->variants;
+stk::VarSearch::VarSearch(Analyzer* an) {
+	par = &an->par;
+	status = &par->status;
+	logger = &par->logger;
+	variants.setReference(&an->par.reference);
+	threads = &par->threads;
+	filter = VarFilter(&par->reference, &par->annotdb, &par->varp, &par->target);
 }
-varsearch::~varsearch() {
-    if (cnan) delete cnan;
+stk::VarSearch::~VarSearch() {}
+/**
+* Get primary SV candidates
+*/
+void stk::VarSearch::selectCandidate(NGSData* data) {
+	auto num = data->summary.refnum;
+	auto cand1 = candidates1.begin();
+	auto cand2 = candidates2.begin();
+	auto task = 0;
+	sforin(r, 0, num) {
+		threads->addTask(selectDelCandidate, task, cand1.ptr(), &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::DEL], par);
+		++cand1; ++task;
+		threads->addTask(selectDupCandidate, task, cand1.ptr(), &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::DUP], par);
+		++cand1; ++task;
+		threads->addTask(selectInsCandidate, task, cand1.ptr(), &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::INS], par);
+		++cand1; ++task;
+		threads->addTask(selectComplexCandidate, task, cand2.ptr(), &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::DEL], &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::DUP], par);
+		++cand2; ++task;
+		threads->addTask(selectComplexCandidate, task, cand2.ptr(), &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::DUP], &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::DEL], par);
+		++cand2; ++task;
+		threads->addTask(selectInvCandidate, task, cand2.ptr(), &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::INV], par);
+		cand2 += 3; ++task;
+		//
+		sforin(s, r + 1, num) {
+			threads->addTask(selectTrsCandidate, task, r, s, cand2.ptr(), &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::TRS], &data->variants[s * SV_TYPE_COUNT + (int)SVREAD_TYPE::TRS], par);
+			cand2 += 3; ++task;
+			//
+			threads->addTask(selectTrInvCandidate, task, r, s, cand2.ptr(), &data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::TRS], par);
+			cand2 += 3;
+		}
+	}
+	threads->complete();
 }
-
-inline void combinate(varinfo_t *vi, variant_t *v) {
-    vi->variant += *v;
-    vi->variant.alt += "/"+v->alt;
+/**
+* Filter by copy number
+*/
+void stk::VarSearch::copyCheck(NGSData* data) {
+	primary.resize(candidates1.size() + candidates2.size());
+	auto prim = primary.begin();
+	auto cand1 = candidates1.begin();
+	auto cand2 = candidates2.begin();
+	sforin(r, 0, data->summary.refnum) {
+		//threads->addTask(getDelCpy, prim.ptr(), cand1.ptr(), &cna, par);
+		getDelCpy(prim.ptr(), cand1.ptr(), &cna, par);
+		++cand1; ++prim;
+		//threads->addTask(getDupCpy, prim.ptr(), cand1.ptr(), &cna, par);
+		getDupCpy(prim.ptr(), cand1.ptr(), &cna, par);
+		++cand1; ++prim;
+		//threads->addTask(getInsCpy, prim.ptr(), cand1.ptr(), &cna, par);
+		getInsCpy(prim.ptr(), cand1.ptr(), &cna, par);
+		++cand1; ++prim;
+		//threads->addTask(getComplexCpy, prim.ptr(), cand2.ptr(), &cna, par);
+		getComplexCpy(prim.ptr(), cand2.ptr(), &cna, par);
+		++cand2; ++prim;
+		//threads->addTask(getComplexCpy, prim.ptr(), cand2.ptr(), &cna, par);
+		getComplexCpy(prim.ptr(), cand2.ptr(), &cna, par);
+		++cand2; ++prim;
+		//threads->addTask(getInvCpy, prim.ptr(), cand2.ptr(), &cna, par);
+		getInvCpy(prim.ptr(), cand2.ptr(), &cna, par);
+		++cand2; ++prim;
+		//threads->addTask(getInvInsCpy1, prim.ptr(), cand2.ptr(), &cna, par);
+		getInvInsCpy1(prim.ptr(), cand2.ptr(), &cna, par);
+		++cand2; ++prim;
+		//threads->addTask(getInvInsCpy2, prim.ptr(), cand2.ptr(), &cna, par);
+		getInvInsCpy2(prim.ptr(), cand2.ptr(), &cna, par);
+		++cand2; ++prim;
+		sforin(s, r + 1, data->summary.refnum) {
+			//threads->addTask(getTrsCpy, prim.ptr(), cand2.ptr(), &cna, par);
+			getTrsCpy(prim.ptr(), cand2.ptr(), &cna, par);
+			++cand2; ++prim;
+			//threads->addTask(getTrsInsCpy1, prim.ptr(), cand2.ptr(), &cna, par);
+			getTrsInsCpy1(prim.ptr(), cand2.ptr(), &cna, par);
+			++cand2; ++prim;
+			//threads->addTask(getTrsInsCpy2, prim.ptr(), cand2.ptr(), &cna, par);
+			getTrsInsCpy2(prim.ptr(), cand2.ptr(), &cna, par);
+			++cand2; ++prim;
+			//threads->addTask(getTrsInvCpy, prim.ptr(), cand2.ptr(), &cna, par);
+			getTrsInvCpy(prim.ptr(), cand2.ptr(), &cna, par);
+			++cand2; ++prim;
+			//threads->addTask(getTrsInvInsCpy1, prim.ptr(), cand2.ptr(), &cna, par);
+			getTrsInvInsCpy1(prim.ptr(), cand2.ptr(), &cna, par);
+			++cand2; ++prim;
+			//threads->addTask(getTrsInvInsCpy2, prim.ptr(), cand2.ptr(), &cna, par);
+			getTrsInvInsCpy2(prim.ptr(), cand2.ptr(), &cna, par);
+			++cand2; ++prim;
+		}
+	}
+	//threads->complete();
 }
-inline void oneStart(varinfo_t *vi) {
-    vi->variant.pos1.pos++;
-    if (-1 < vi->variant.pos2.idx) vi->variant.pos2.pos++;
+/*
+* Filter conflict variant
+*/
+inline bool synVar(Variant *v1, Variant* v2, slib::sbio::SeqList *ref, stk::Param *par) {
+	String s1, s2;
+	if (v1->type == DELETION) {
+		s1 = ref->at(v1->pos[0].idx).raw(v1->pos[0].begin - par->varp.svp.break_site_len, par->varp.svp.break_site_len) + v1->alt;
+		s2 = ref->at(v2->pos[0].idx).raw(v2->pos[0].begin - par->varp.svp.break_site_len, par->varp.svp.break_site_len) + v2->alt;
+		if (s1.size() != par->varp.svp.break_site_len) s1.clip(s1.size() - par->varp.svp.break_site_len);
+		if (s2.size() != par->varp.svp.break_site_len) s2.clip(s2.size() - par->varp.svp.break_site_len);
+		if (par->varp.svp.max_dist < slib::smath::levenshtein(&s1[0], s1.size(), &s2[0], s2.size())) return false;
+		s1 = v1->alt + ref->at(v1->pos[0].idx).raw(v1->pos[0].end - 1, par->varp.svp.break_site_len);
+		s2 = v2->alt + ref->at(v2->pos[0].idx).raw(v2->pos[0].end - 1, par->varp.svp.break_site_len);
+		if (s1.size() != par->varp.svp.break_site_len) s1.resize(par->varp.svp.break_site_len);
+		if (s2.size() != par->varp.svp.break_site_len) s2.resize(par->varp.svp.break_site_len);
+		if (par->varp.svp.max_dist < slib::smath::levenshtein(s1.cstr(), s1.size(), s2.cstr(), s2.size())) return false;
+		return true;
+	}
+	else if (v1->type == DUPLICATION) {
+		s1 = ref->at(v1->pos[0].idx).raw(v1->pos[0].end - par->varp.svp.break_site_len, par->varp.svp.break_site_len) + v1->alt;
+		s2 = ref->at(v2->pos[0].idx).raw(v2->pos[0].end - par->varp.svp.break_site_len, par->varp.svp.break_site_len) + v2->alt;
+		if (s1.size() != par->varp.svp.break_site_len) s1.clip(s1.size() - par->varp.svp.break_site_len);
+		if (s2.size() != par->varp.svp.break_site_len) s2.clip(s2.size() - par->varp.svp.break_site_len);
+		if (par->varp.svp.max_dist < slib::smath::levenshtein(s1.cstr(), s1.size(), s2.cstr(), s2.size())) return false;
+		s1 = v1->alt + ref->at(v1->pos[0].idx).raw(v1->pos[0].begin - 1, par->varp.svp.break_site_len);
+		s2 = v2->alt + ref->at(v2->pos[0].idx).raw(v2->pos[0].begin - 1, par->varp.svp.break_site_len);
+		if (s1.size() != par->varp.svp.break_site_len) s1.resize(par->varp.svp.break_site_len);
+		if (s2.size() != par->varp.svp.break_site_len) s2.resize(par->varp.svp.break_site_len);
+		if (par->varp.svp.max_dist < slib::smath::levenshtein(s1.cstr(), s1.size(), s2.cstr(), s2.size())) return false;
+		return true;
+	}
+	return false;
 }
-
-inline bool srVarCheck1(int i, variant_t &var, variant_param_t *vp) {
-    return vp->srv_par.min_sr[i] <= var.total() &&
-    readBias(var.pread, var.nread) <= vp->srv_par.max_fr_bias;/* &&
-    vp->min_qual <= phredVal(var.qual);*/
+inline bool transHetero(Variant* v1, Variant* v2, stk::Param* par) {
+	if (v1->type == DELETION || v1->type == DUPLICATION) {
+		if (v1->pos[0].include(v2->pos[0]) &&
+			(v1->genotype & HETERO_VAR)&&
+			(v2->genotype & HOMO_VAR)) return true;
+		else if (v2->pos[0].include(v1->pos[0]) &&
+			(v2->genotype & HETERO_VAR) &&
+			(v1->genotype & HOMO_VAR)) return true;
+		else if ((v1->genotype & HETERO_VAR) &&
+			(v2->genotype & HETERO_VAR)) return true;
+	}
+	return false;
 }
-inline bool srVarCheck2(int i, variant_t &v1, variant_t &v2, variant_param_t *vp) {
-    return vp->srv_par.min_comp_sr[i] <= v1.total()+v2.total() &&
-    readBias(v1.total(), v2.total()) <= vp->srv_par.max_comp_bias;/* &&
-    vp->min_qual <= phredVal(1.0-(1.0-v1.qual)*(1.0-v2.qual));*/
+void stk::VarSearch::conflictCheck() {
+	// For germline variant
+	Array<FreePointer<Variant>> tmp;
+	sfor(variants) {
+		if (($_->flag & NOT_USE_FLAG) || ($_->flag & UNAVAILABLE_FLAG)) continue;
+		Variant* var = $_;
+		tmp.clear();
+		sforin(nxt, $ + 1, variants.end()) {
+			if (((*nxt)->flag & NOT_USE_FLAG) || ((*nxt)->flag & UNAVAILABLE_FLAG)) continue;
+			if (var->pos[0].idx != (*nxt)->pos[0].idx || var->pos[0].end < (*nxt)->pos[0].begin) break;
+			if (var->type == (*nxt)->type && var->pos[0].overlap((*nxt)->pos[0])) {
+				if (synVar(var, *nxt, &par->reference, par)) {
+					if (var->qual < (*nxt)->qual) {
+						var->flag |= NOT_USE_FLAG; break;
+					}
+					else (*nxt)->flag |= NOT_USE_FLAG;
+				}
+				else tmp.add(*nxt);
+			}
+		}
+		// 
+		if (1 < tmp.size()) {
+			auto maxv = var;
+			sforeach(candidate, tmp) {
+				if (maxv->qual < candidate->qual) {
+					maxv->flag |= NOT_USE_FLAG; maxv = candidate;
+				}
+			}
+		}
+		else if (tmp.size() == 1) {
+			if (transHetero(var, tmp[0], par)) {
+				var->genotype = TRANS_HETERO_VAR;
+				tmp[0]->genotype = TRANS_HETERO_VAR;
+			}
+			else {
+				if (var->qual < tmp[0]->qual) var->flag |= NOT_USE_FLAG;
+				else tmp[0]->flag |= NOT_USE_FLAG;
+			}
+		}
+	}
 }
-inline void calcCP(sbpos_t *pos, double *copy, double *bgcopy, sbamsummary *sum, sbamsummary *bg, cnanalysis *cnan) {
-    /*
-    if (pos->len < MAX_DIRECT_COUNT) {
-        copy[0] = cnan->depthIn(pos->idx, pos->pos-1, pos->len);
-        if (bg) bgcopy[0] = cnan->depthIn(pos->idx,  pos->pos-1,  pos->len, true);
-        else bgcopy[0] = 1.0f;
-    }
-    else {
-     */
-        copy[0] = sum->depthIn(pos->idx, pos->pos-1, pos->len);
-        if (bg) bgcopy[0] = bg->depthIn(pos->idx, pos->pos-1, pos->len);
-        else bgcopy[0] = 1.0f;
-    //}
-    if (0.0 < sum->average_depth) copy[1]=copy[0]/sum->average_depth;
-    if (bg) {
-        if (0.0 < bg->average_depth) bgcopy[1]=bgcopy[0]/bg->average_depth;
-        else bgcopy[1] = bgcopy[0];
-    }
-    else bgcopy[1] = 1.0f;
-    if (0.0 < bgcopy[1]) copy[2] = copy[1]/bgcopy[1];
-    else copy[2] = INFINITY;
-}
-inline void calcCP2(sbpos_t *pos1, sbpos_t *pos2, double *copy, double *bgcopy, sbamsummary *sum, sbamsummary *bg, cnanalysis *cnan) {
-    /*
-    if (pos1->len < MAX_DIRECT_COUNT) {
-        copy[0] = cnan->depthIn(pos1->idx, pos1->pos-1, pos1->len);
-        if (bg) bgcopy[0] = cnan->depthIn(pos1->idx,  pos1->pos-1,  pos1->len, true);
-        else bgcopy[0] = 1.0f;
-    }
-    else {
-     */
-        copy[0] = sum->depthIn(pos1->idx, pos1->pos-1, pos1->len);
-        if (bg) bgcopy[0] = bg->depthIn(pos1->idx, pos1->pos-1, pos1->len);
-        else bgcopy[0] = 1.0f;
-    //}
-    /*
-    if (pos2->len < MAX_DIRECT_COUNT) {
-        copy[0] += cnan->depthIn(pos2->idx, pos2->pos-1, pos2->len);
-        if (bg) bgcopy[0] += cnan->depthIn(pos2->idx,  pos2->pos-1,  pos2->len, true);
-        else bgcopy[0] += 1.0f;
-    }
-    else {
-     */
-        copy[0] += sum->depthIn(pos2->idx, pos2->pos-1, pos2->len);
-        if (bg) bgcopy[0] += bg->depthIn(pos2->idx, pos2->pos-1, pos2->len);
-        else bgcopy[0] += 1.0f;
-    //}
-    copy[0]/=2.0; bgcopy[0]/=2.0;
-    if (0.0 < sum->average_depth) copy[1]=copy[0]/sum->average_depth;
-    if (bg) {
-        if (0.0 < bg->average_depth) bgcopy[1] = bgcopy[0]/bg->average_depth;
-        else bgcopy[1] = bgcopy[0];
-    }
-    else bgcopy[1] = 1.0f;
-    if (0.0 < bgcopy[1]) copy[2] = copy[1]/bgcopy[1];
-    else copy[2] = INFINITY;
-}
-
-void varsearch::makeDelList(int r) {
-    auto &variants = summary->variants[5*r];
-    auto &list = sr_dels[r];
-    if (!vpar->srv_par.detect_var[0] || variants.empty()) return;
-    sforeach(variants) {
-        if(srVarCheck1(0, selement, vpar) && vpar->min_length[0] <= selement.pos1.len) list.add(it-variants.begin());
-    }
-}
-inline void makeDelInfo(variant_t *var, varinfo_t *vi, sbamsummary *sum, sdnafile *ref) {
-    vi->var_method = SPLIT_READ_VARIANT;
-    vi->variant = *var;
-    vi->variant.pos1.pos++;
-    vi->variant.pos2.init();
-    vi->variant.pos2.len = vi->variant.alt.length();
-    vi->cp.frequency = 2.0*(vi->variant.nread+vi->variant.pread)/
-    (sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos+vi->variant.pos1.len)/sum->bin]);
-    if (1.0f < vi->cp.frequency) vi->cp.frequency = 1.0;
-    vi->variant.pos1.setName(ref->name(vi->variant.pos1.idx));
-    oneStart(vi);
-}
-inline void calcDelCp(varinfo_t *vi, sbamsummary *sum, sbamsummary *bg, cnanalysis *cnan, variant_param_t *par) {
-    calcCP(&vi->variant.pos1, vi->cp.copy, vi->cp.bgcopy, sum, bg, cnan);
-    if (vi->cp.copy[2] <= par->cnv_par.homo_del_cp) vi->cp.homo = true;
-    if (par->cnv_par.del_cp < vi->cp.copy[2] || (bg && vi->cp.bgcopy[0] < par->cnv_par.bg_depth)) vi->variant.type = 0;
-    else vi->var_method |= COPY_NUM_VARIANT;
-}
-void varsearch::makeDelInfoList(int r, int v) {
-    auto &variants = summary->variants[5*r];
-    auto &list = sr_dels[r];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeachi(i, list) {
-        makeDelInfo(&variants[list[i]], vptr, summary, ref);
-        ++vptr;
-    }
-}
-void varsearch::makeDelCPInfoList(int r, int v) {
-    auto &variants = summary->variants[5*r];
-    auto &list = sr_dels[r];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeachi(i, list)  {
-        makeDelInfo(&variants[list[i]], vptr, summary, ref);
-        calcDelCp(vptr, summary, background, cnan, vpar);
-        ++vptr;
-    }
-}
-void varsearch::makeDupList(int r) {
-    auto &variants = summary->variants[5*r+1];
-    auto &list = sr_dups[r];
-    if (!vpar->srv_par.detect_var[1] || variants.empty()) return;
-    sforeach(variants) {
-        if(srVarCheck1(1, selement, vpar) && vpar->min_length[1] <= selement.pos1.len) list.add(it-variants.begin());
-    }
-}
-inline void makeDupInfo(variant_t *var, varinfo_t *vi, sbamsummary *sum, sdnafile *ref) {
-    vi->var_method = SPLIT_READ_VARIANT;
-    vi->variant = *var;
-    vi->variant.pos1.pos = var->pos2.pos;
-    vi->variant.pos2.init();
-    vi->variant.pos2.len = vi->variant.alt.length();
-    vi->cp.frequency = 2.0*(vi->variant.nread+vi->variant.pread)/
-    (sum->depth[vi->variant.pos1.idx][vi->variant.pos1.pos/sum->bin]+
-     sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos+vi->variant.pos1.len-1)/sum->bin]);
-    if (1.0f < vi->cp.frequency) vi->cp.frequency = 1.0;
-    vi->variant.pos1.setName(ref->name(vi->variant.pos1.idx));
-    oneStart(vi);
-}
-inline void calcDupCp(varinfo_t *vi, sbamsummary *sum, sbamsummary *bg, cnanalysis *cnan, variant_param_t *par) {
-    calcCP(&vi->variant.pos1, vi->cp.copy, vi->cp.bgcopy, sum, bg, cnan);
-    if (par->cnv_par.homo_freq <= vi->cp.frequency) vi->cp.homo = true;
-    if (vi->cp.copy[2] < par->cnv_par.dup_cp || (bg && vi->cp.bgcopy[0] < par->cnv_par.bg_depth)) vi->variant.type = 0;
-    else {
-        if (par->cnv_par.mul_cp <= vi->cp.copy[2]) vi->variant.type = SB_MULTIPLICATION;
-        vi->var_method |= COPY_NUM_VARIANT;
-    }
-}
-void varsearch::makeDupInfoList(int r, int v) {
-    auto &variants = summary->variants[5*r+1];
-    auto &list = sr_dups[r];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeachi(i, list) {
-        makeDupInfo(&variants[list[i]], vptr, summary, ref);
-        ++vptr;
-    }
-}
-void varsearch::makeDupCPInfoList(int r, int v) {
-    auto &variants = summary->variants[5*r+1];
-    auto &list = sr_dups[r];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeachi(i, list) {
-        makeDupInfo(&variants[list[i]], vptr, summary, ref);
-        calcDupCp(vptr, summary, background, cnan, vpar);
-        ++vptr;
-    }
+/*
+* Gene and reported variant annotation
+*/
+void stk::VarSearch::annotate() {
+	sforeach(var, variants) {
+		if ((var->flag & NOT_USE_FLAG) || (var->flag & UNAVAILABLE_FLAG)) continue;
+		par->annotdb.annotate(*var, par->reference, par->varp);
+	}
 }
 
-//InDel////////////
-//  1 2     2'1' //
-// -> ->   -> -> //
-//  2 1     1'2' //
-// -> ->   -> -> //
-///////////////////
-void varsearch::makeInDelList1(int r) {
-    auto &del = summary->variants[5*r], &ins = summary->variants[5*r+1];
-    auto &list = sr_indels[2*r];
-    auto &vidx = summary->insidx[r];
-    if (!vpar->srv_par.detect_comp_var[0] || del.empty() || ins.empty()) return;
-    for (auto dit = del.begin(); dit < del.end(); ++dit) {
-        auto start = ins.begin()+vidx[dit->pos2.pos>>14];
-        for (auto iit = start; iit < ins.end(); ++iit) {
-            if (srVarCheck1(0, *dit, vpar) &&
-                srVarCheck1(1, *iit, vpar) &&
-                srVarCheck2(0, *dit, *iit, vpar) &&
-                iit->pos2.pos < dit->pos2.pos &&
-                dit->pos2.pos < iit->pos1.pos &&
-                dit->pos1.pos-vpar->max_dist <= iit->pos2.pos &&
-                (vpar->min_length[0] <= iit->pos2.pos-dit->pos1.pos ||
-                 vpar->min_length[1] <= iit->pos1.pos-dit->pos2.pos+1))
-                list.add(std::make_pair(dit-del.begin(), iit-ins.begin()));
-        }
-    }
+inline void resizeCandidates(NGSData* data, Array<Array<SVar*>>* candidates1, Array<Array<Pair<SVar*, SVar*>>>* candidates2, stk::Param *par) {
+	int n = (int)par->reference.size(),
+		n2 = smath::combination(n, 2);
+ 	candidates1->resize(n * 3);
+	candidates2->resize(n * 5 + n2 * 6);
+	size_t total = 0;
+	sforin(r, 0, n) {
+		total += data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::DEL].size() * 2;
+		total += data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::DUP].size() * 2;
+		total += data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::INS].size();
+		total += data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::INV].size();
+		total += data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::TRS].size();
+		total += data->variants[r * SV_TYPE_COUNT + (int)SVREAD_TYPE::TRINV].size();
+	}
+	par->status.setTask(total, n * 8 + n2 * 6);
 }
-void varsearch::makeInDelList2(int r) {
-    auto &del = summary->variants[5*r], &ins = summary->variants[5*r+1];
-    auto &list = sr_indels[2*r+1];
-    auto &vidx = summary->delidx[r];
-    if (!vpar->srv_par.detect_comp_var[0] || del.empty() || ins.empty()) return;
-    for (auto iit = ins.begin(); iit < ins.end(); ++iit) {
-        auto start = del.begin()+vidx[iit->pos2.pos>>14];
-        for (auto dit = start; dit < del.end(); ++dit) {
-            if (srVarCheck1(0, *dit, vpar) &&
-                srVarCheck1(1, *iit, vpar) &&
-                srVarCheck2(0, *dit, *iit, vpar) &&
-                iit->pos2.pos < dit->pos1.pos &&
-                dit->pos1.pos < iit->pos1.pos &&
-                iit->pos1.pos-vpar->max_dist <= dit->pos2.pos &&
-                (vpar->min_length[0] <= dit->pos2.pos-iit->pos1.pos ||
-                 vpar->min_length[1] <= dit->pos1.pos-iit->pos2.pos+1))
-                list.add(std::make_pair(iit-ins.begin(), dit-del.begin()));
-        }
-    }
+inline void setVarID(slib::sbio::VarList& vlist) {
+	auto idx = 1;
+	sfor(vlist) {
+		if ($_->varid.empty()) $_->varid = "variant_" + S(idx);
+		++idx;
+	}
 }
-inline void makeInDelInfo(variant_t *var1, variant_t *var2, varinfo_t *vi, sbamsummary *sum, sdnafile *ref) {
-    vi->var_method = SPLIT_READ_VARIANT;
-    vi->variant = *var1;
-    vi->variant.type = SB_INSERTION;
-    vi->variant.pos1.len = var2->pos2.pos-var1->pos1.pos-1;
-    if(0 < vi->variant.pos1.len) {
-        vi->variant.pos1.pos++;
-        vi->variant.type |= SB_DELETION;
-    }
-    else {
-        vi->variant.pos1.pos = var2->pos2.pos;
-        vi->variant.pos1.len = 1;
-    }
-    vi->variant.pos2.len = var2->pos1.pos-var1->pos2.pos+1;
-    vi->variant.pos1.setName(ref->name(vi->variant.pos1.idx));
-    vi->variant.pos2.setName(ref->name(vi->variant.pos2.idx));
-    combinate(vi, var2);
-    vi->cp.frequency = 2.0*(vi->variant.nread+vi->variant.pread)/
-    (sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos+vi->variant.pos1.len)/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][vi->variant.pos2.pos/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][(vi->variant.pos2.pos+vi->variant.pos2.len-1)/sum->bin]);
-    if (1.0f < vi->cp.frequency) vi->cp.frequency = 1.0;
-    oneStart(vi);
-}
-inline void calcInDelCp(varinfo_t *vi, sbamsummary *sum, sbamsummary *bg, cnanalysis *cnan, variant_param_t *par) {
-    calcCP(&vi->variant.pos2, &vi->cp.copy[3], &vi->cp.bgcopy[2], sum, bg, cnan);
-    if(vi->variant.type&SB_DELETION) {
-        calcCP(&vi->variant.pos1, vi->cp.copy, vi->cp.bgcopy, sum, bg, cnan);
-        if (vi->cp.copy[2] <= par->cnv_par.homo_del_cp) vi->cp.homo = true;
-        if (par->cnv_par.del_cp < vi->cp.copy[2] ||
-            (bg && vi->cp.bgcopy[0] < par->cnv_par.bg_depth)) vi->variant.type = 0;
-    }
-    else if(par->cnv_par.homo_freq <= vi->cp.frequency) vi->cp.homo = true;
-    if (vi->variant.type) {
-        if (par->cnv_par.dup_cp <= vi->cp.copy[5]) vi->variant.type |= SB_DUPLICATION;
-        if (par->cnv_par.mul_cp <= vi->cp.copy[5]) vi->variant.type |= SB_MULTIPLICATION;
-        vi->var_method |= COPY_NUM_VARIANT;
-    }
-}
-void varsearch::makeInDelInfoList(int r, int v, int i) {
-    auto &del = summary->variants[5*r], &ins = summary->variants[5*r+1];
-    auto &list = sr_indels[2*r+i];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeInDelInfo((i?(&ins[selement.first]):(&del[selement.first])),
-                      (i?(&del[selement.second]):(&ins[selement.second])), vptr, summary, ref);
-        ++vptr;
-    }
-}
-void varsearch::makeInDelCPInfoList(int r, int v, int i) {
-    auto &del = summary->variants[5*r], &ins = summary->variants[5*r+1];
-    auto &list = sr_indels[2*r+i];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeInDelInfo((i?(&ins[selement.first]):(&del[selement.first])),
-                      (i?(&del[selement.second]):(&ins[selement.second])), vptr, summary, ref);
-        calcInDelCp(vptr, summary, background, cnan, vpar);
-        ++vptr;
-    }
+void stk::VarSearch::detect(NGSData* data) {
+	try {
+		// Status => Running
+		status->setState(stk::RUNNING);
+		//
+		variants.attribute["detect-type"] = "SV";
+		variants.attribute["_prog_"] = { "slib", "Sutoku" };
+		// Log
+		logger->log("Started to detect structure variants.");
+		//
+		//VarFilter filter(&par->reference, &par->annotdb, &par->varp, &par->target);
+		bool hasCtrl = par->control.isLoaded();
+		if (hasCtrl) {
+			// Log
+			logger->log("Subtraction of background variants.");
+			// Subtraction
+			sfor2(data->variants, par->control.variants) threads->addTask(stk::subtract, &$_1, &$_2, par);
+			threads->complete();
+			logger->log("Completed.");
+		}
+		// Log
+		logger->log("Primary detection.");
+		//
+		cna.setParam(par);
+		cna.setData(data, (hasCtrl ? &par->control : nullptr));
+		cna.analyze();
+		//
+		resizeCandidates(data, &candidates1, &candidates2, par);
+		// Display progress
+		SWrite(SP * 4, "> Progress: ", SP * 4);
+		std::thread thread1(stk::showProgress, status);
+		//
+		selectCandidate(data);
+		//
+		stk::closeThread(&thread1, status);
+		// Log
+		logger->log("Copy number check.");
+		// Display progress
+		SWrite(SP * 4, "> Progress: ", SP * 4);
+		std::thread thread2(stk::showProgress, status);
+		//
+		copyCheck(data);
+		//
+		stk::closeThread(&thread2, status);
+		// Log
+		logger->log("Integration.");
+		// 
+		size_t count = 0;
+		sfor(primary) count += $_.size();
+		variants.reserve(count + 1);
+		sfor(primary) variants.append($_);
+		//
+		conflictCheck();
+		//
+		if (par->annotation) {
+			// Log
+			logger->log("Annotation.");
+			annotate();
+			logger->log("Completed.");
+		}
+		//
+		filter.filter(variants);
+		//if (par->filters)
+		// 
+		variants.tidyUp();
+		setVarID(variants);
+	}
+	catch (Exception ex) {
+		logger->log(ex);
+		status->setState(stk::ERRORED);
+	}
 }
 
-//Inv////////////////
-//  1 1''   1'1''' //
-// -> <-   <- ->   //
-/////////////////////
-void varsearch::makeInvList(int r) {
-    auto &inv = summary->variants[5*r+2];
-    auto &list = sr_invs[3*r];
-    auto &vidx = summary->invidx[2*r+1];
-    if (!vpar->srv_par.detect_comp_var[1] || inv.empty()) return;
-    auto beg = inv.begin()+vidx[0];
-    if (beg->pos2.dir) return;
-    for (auto iit = inv.begin(); iit < inv.end(); ++iit) {
-        if (iit->pos1.dir) break;
-        for (auto iit_ = beg; iit_ < inv.end(); ++iit_) {
-            if (iit->pos2.pos - par->an_par.min_clip_length < iit_->pos1.pos) break;
-            if (srVarCheck1(2, *iit, vpar) &&
-                srVarCheck1(2, *iit_, vpar) &&
-                srVarCheck2(1, *iit, *iit_, vpar) &&
-                iit->pos1.pos-vpar->max_dist <= iit_->pos1.pos &&
-                iit->pos2.pos-vpar->max_dist <= iit_->pos2.pos &&
-                (vpar->min_length[2] <= iit->pos2.pos-iit_->pos1.pos+1))
-                list.add(std::make_pair(iit-inv.begin(), iit_-inv.begin()));
-        }
-    }
-}
-inline void makeInvInfo(variant_t *var1, variant_t *var2,
-                        varinfo_t *vi, sbamsummary *sum, sdnafile *ref) {
-    vi->var_method = SPLIT_READ_VARIANT;
-    vi->variant = *var1;
-    vi->variant.pos2 = var2->pos1;
-    vi->variant.pos2.len = var1->pos2.pos-var2->pos1.pos+1;
-    if (var1->pos1.pos < var2->pos1.pos) vi->variant.pos1.pos++;
-    else vi->variant.pos1.pos = var2->pos1.pos;
-    if (var1->pos2.pos < var2->pos2.pos) vi->variant.pos1.len = var2->pos2.pos-vi->variant.pos1.pos;
-    else vi->variant.pos1.len = var1->pos2.pos-vi->variant.pos1.pos+1;
-    if(vi->variant.pos2.len < vi->variant.pos1.len)
-        vi->variant.type |= SB_DELETION;
-    vi->variant.pos1.setName(ref->name(vi->variant.pos1.idx));
-    vi->variant.pos2.setName(ref->name(vi->variant.pos2.idx));
-    combinate(vi, var2);
-    vi->cp.frequency = 2.0*(vi->variant.nread+vi->variant.pread)/
-    (sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos+vi->variant.pos1.len)/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][vi->variant.pos2.pos/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][(vi->variant.pos2.pos+vi->variant.pos2.len-1)/sum->bin]);
-    if (1.0f < vi->cp.frequency) vi->cp.frequency = 1.0;
-    oneStart(vi);
-}
-inline void calcInvCp(varinfo_t *vi, sbamsummary *sum, sbamsummary *bg, cnanalysis *cnan, variant_param_t *par) {
-    calcCP(&vi->variant.pos2, &vi->cp.copy[3], &vi->cp.bgcopy[2], sum, bg, cnan);
-    if(vi->variant.type&SB_DELETION) {
-        sbpos_t p1 = vi->variant.pos1, p2 = vi->variant.pos2;
-        p1.len = vi->variant.pos2.pos-vi->variant.pos1.pos;
-        p2.pos += p2.len;
-        p2.len = p1.pos+p1.len-p2.pos-p2.len;
-        calcCP2(&p1, &p2, vi->cp.copy, vi->cp.bgcopy, sum, bg, cnan);
-        if (vi->cp.copy[2] <= par->cnv_par.homo_del_cp) vi->cp.homo = true;
-        if (par->cnv_par.del_cp < vi->cp.copy[2] ||
-            (bg && vi->cp.bgcopy[0] < par->cnv_par.bg_depth)) vi->variant.type = 0;
-    }
-    else if(par->cnv_par.homo_freq <= vi->cp.frequency) vi->cp.homo = true;
-    if (vi->variant.type) {
-        if (par->cnv_par.dup_cp <= vi->cp.copy[5]) vi->variant.type |= SB_DUPLICATION;
-        if (par->cnv_par.mul_cp <= vi->cp.copy[5]) vi->variant.type |= SB_MULTIPLICATION;
-        vi->var_method |= COPY_NUM_VARIANT;
-    }
-}
-void varsearch::makeInvInfoList(int r, int v) {
-    auto &inv = summary->variants[5*r+2];
-    auto &list = sr_invs[3*r];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeInvInfo(&inv[selement.first], &inv[selement.second], vptr, summary, ref);
-        ++vptr;
-    }
-}
-void varsearch::makeInvCPInfoList(int r, int v) {
-    auto &inv = summary->variants[5*r+2];
-    auto &list = sr_invs[3*r];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeInvInfo(&inv[selement.first], &inv[selement.second], vptr, summary, ref);
-        calcInvCp(vptr, summary, background, cnan, vpar);
-        ++vptr;
-    }
-}
-
-//InvIns/////////////////////
-//  1 2'    2 1'      1'2  //
-// -> <-   <- ->  =  <- -> //
-//  1'2     2 1'      1 2' //
-// -> <- = -> <-     <- -> //
-/////////////////////////////
-void varsearch::makeInvInsList1(int r) {
-    auto &inv = summary->variants[5*r+2];
-    auto &list = sr_invs[3*r+1];
-    auto &vidx = summary->invidx[2*r+1];
-    if (!vpar->srv_par.detect_comp_var[0] || inv.empty()) return;
-    auto beg = inv.begin()+vidx[0];
-    if (beg->pos2.dir) return;
-    for (auto iit = inv.begin(); iit < inv.end(); ++iit) {
-        if (iit->pos1.dir) break;
-        beg = inv.begin()+vidx[(iit->pos1.pos-vpar->max_dist)>>14];
-        for (auto iit_ = beg; iit_ < inv.end(); ++iit_) {
-            if (srVarCheck1(2, *iit, vpar) &&
-                srVarCheck1(2, *iit_, vpar) &&
-                srVarCheck2(0, *iit, *iit_, vpar) &&
-                iit_->pos2.pos < iit->pos2.pos &&
-                iit->pos1.pos-vpar->max_dist <= iit_->pos1.pos &&
-                (vpar->min_length[0] <= iit_->pos1.pos-iit->pos1.pos ||
-                 vpar->min_length[1] <= iit->pos2.pos-iit_->pos2.pos+1))
-                list.add(std::make_pair(iit-inv.begin(), iit_-inv.begin()));
-        }
-    }
-}
-void varsearch::makeInvInsList2(int r) {
-    auto &inv = summary->variants[5*r+2];
-    auto &list = sr_invs[3*r+1];
-    auto &vidx = summary->invidx[2*r+1];
-    if (!vpar->srv_par.detect_comp_var[0] || inv.empty()) return;
-    auto beg = inv.begin()+vidx[0];
-    if (beg->pos2.dir) return;
-    for (auto iit = inv.begin(); iit < inv.end(); ++iit) {
-        if (iit->pos1.dir) break;
-        for (auto iit_ = beg; iit_ < inv.end(); ++iit_) {
-            if (iit->pos1.pos < iit_->pos1.pos) break;
-            if (srVarCheck1(2, *iit, vpar) &&
-                srVarCheck1(2, *iit_, vpar) &&
-                srVarCheck2(0, *iit, *iit_, vpar) &&
-                iit->pos2.pos-vpar->max_dist <= iit_->pos2.pos &&
-                (vpar->min_length[0] <= iit_->pos2.pos-iit->pos2.pos ||
-                 vpar->min_length[1] <= iit->pos1.pos-iit_->pos1.pos+1))
-                list.add(std::make_pair(iit_-inv.begin(), iit-inv.begin()));
-        }
-    }
-}
-inline void makeInvInsInfo(variant_t *var1, variant_t *var2, varinfo_t *vi, sbamsummary *sum, sdnafile *ref) {
-    vi->var_method = SPLIT_READ_VARIANT;
-    variant_t var_;
-    if (var1->pos1.dir) {
-        var_ = *var1;
-        vi->variant = *var2;
-        vi->variant.comp();
-    }
-    else {
-        vi->variant = *var1;
-        var_ = *var2;
-        var_.comp();
-    }
-    vi->variant.type |= SB_INSERTION;
-    vi->variant.pos1.len = var_.pos2.pos-vi->variant.pos1.pos-1;
-    if (0 < vi->variant.pos1.len) {
-        vi->variant.pos1.pos++;
-        vi->variant.type |= SB_DELETION;
-    }
-    else {
-        vi->variant.pos1.pos = var_.pos2.pos;
-        vi->variant.pos1.len = 1;
-    }
-    vi->variant.pos2.len = vi->variant.pos2.pos-var_.pos1.pos+1;
-    vi->variant.pos2.pos = var_.pos1.pos;
-    vi->variant.pos1.setName(ref->name(vi->variant.pos1.idx));
-    vi->variant.pos2.setName(ref->name(vi->variant.pos2.idx));
-    combinate(vi, &var_);
-    vi->cp.frequency = 2.0*(vi->variant.nread+vi->variant.pread)/
-    (sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos+vi->variant.pos1.len)/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][vi->variant.pos2.pos/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][(vi->variant.pos2.pos+vi->variant.pos2.len-1)/sum->bin]);
-    if (1.0f < vi->cp.frequency) vi->cp.frequency = 1.0;
-    oneStart(vi);
-}
-void varsearch::makeInvInsInfoList(int r, int v, int i) {
-    auto &inv = summary->variants[5*r+2];
-    auto &list = sr_invs[3*r+i];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeInvInfo(&inv[selement.first], &inv[selement.second], vptr, summary, ref);
-        ++vptr;
-    }
-}
-void varsearch::makeInvInsCPInfoList(int r, int v, int i) {
-    auto &inv = summary->variants[5*r+2];
-    auto &list = sr_invs[3*r+i];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeInvInfo(&inv[selement.first], &inv[selement.second], vptr, summary, ref);
-        calcInDelCp(vptr, summary, background, cnan, vpar);
-        ++vptr;
-    }
-}
-
-//Trans/////
-//  1 2'  //
-// -> ->  //
-//   x    //
-// -> ->  //
-//  2 1'  //
-////////////
-void varsearch::makeTrsList(int i, int j) {
-    auto &low = summary->variants[5*i+3], &high = summary->variants[5*j+3];
-    auto &list = sr_trs[i][3*j];
-    auto &lidx = summary->trsidx[i][j], &hidx = summary->trsidx[j][i];
-    if (!vpar->srv_par.detect_comp_var[2] || low.empty() || high.empty()) return;
-    auto lbeg = low.begin()+lidx[0];
-    auto hbeg = high.begin()+hidx[0];
-    if (lbeg->pos2.idx != j || hbeg->pos2.idx != i) return;
-    for (auto lit = lbeg; lit < low.end(); ++lit) {
-        if (j < lit->pos2.idx) break;
-        auto limit = lit->pos2.pos+vpar->max_dist;
-        for (auto hit = hbeg; hit < high.end(); ++hit) {
-            if (i < hit->pos2.idx || limit < hit->pos1.pos) break;
-            if (srVarCheck1(3, *lit, vpar) &&
-                srVarCheck1(3, *hit, vpar) &&
-                srVarCheck2(2, *lit, *hit, vpar) &&
-                lit->pos1.pos-vpar->max_dist <= hit->pos2.pos)
-                list.add(std::make_pair(lit-low.begin(), hit-high.begin()));
-        }
-    }
-}
-inline void makeTrsInfo(variant_t *var1, variant_t *var2, varinfo_t *vi, sbamsummary *sum, sdnafile *ref) {
-    vi->var_method = SPLIT_READ_VARIANT;
-    vi->variant = *var1;
-    vi->variant.pos1.len = var2->pos2.pos-var1->pos1.pos-1;
-    if (0 < vi->variant.pos1.len) vi->variant.pos1.pos++;
-    else {
-        vi->variant.pos1.pos = var2->pos2.pos;
-        vi->variant.pos1.len = 0;
-    }
-    vi->variant.pos2 = var2->pos1;
-    vi->variant.pos2.len = var1->pos2.pos-var2->pos1.pos-1;
-    if (0 < vi->variant.pos2.len) vi->variant.pos2.pos++;
-    else {
-        vi->variant.pos2.pos = var1->pos2.pos;
-        vi->variant.pos2.len = 0;
-    }
-    if (vi->variant.pos1.len || vi->variant.pos2.len)
-        vi->variant.type |= SB_DELETION;
-    vi->variant.pos1.setName(ref->name(vi->variant.pos1.idx));
-    vi->variant.pos2.setName(ref->name(vi->variant.pos2.idx));
-    combinate(vi, var2);
-    vi->cp.frequency = 2.0*(vi->variant.nread+vi->variant.pread)/
-    (sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos+vi->variant.pos1.len)/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][(vi->variant.pos2.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][(vi->variant.pos2.pos+vi->variant.pos2.len)/sum->bin]);
-    if (1.0f < vi->cp.frequency) vi->cp.frequency = 1.0;
-    oneStart(vi);
-}
-inline void calcTrsCp(varinfo_t *vi, sbamsummary *sum, sbamsummary *bg, cnanalysis *cnan, variant_param_t *par) {
-    if(vi->variant.type&SB_DELETION) {
-        if (vi->variant.pos1.len) {
-            calcCP(&vi->variant.pos1, vi->cp.copy, vi->cp.bgcopy, sum, bg, cnan);
-            if (vi->cp.copy[2] <= par->cnv_par.homo_del_cp) vi->cp.homo = true;
-            if (par->cnv_par.del_cp < vi->cp.copy[2] ||
-                (bg && vi->cp.bgcopy[0] < par->cnv_par.bg_depth)) vi->variant.type = 0;
-        }
-        if (vi->variant.type && vi->variant.pos2.len) {
-            calcCP(&vi->variant.pos2, &vi->cp.copy[3], &vi->cp.bgcopy[2], sum, bg, cnan);
-            if (vi->cp.copy[5] <= par->cnv_par.homo_del_cp) vi->cp.homo = true;
-            if (par->cnv_par.del_cp < vi->cp.copy[5] ||
-                (bg && vi->cp.bgcopy[2] < par->cnv_par.bg_depth)) vi->variant.type = 0;
-        }
-    }
-    else if(par->cnv_par.homo_freq <= vi->cp.frequency) vi->cp.homo = true;
-    if (vi->variant.type) vi->var_method |= COPY_NUM_VARIANT;
-}
-void varsearch::makeTrsInfoList(int i, int j, int v) {
-    auto &low = summary->variants[5*i+3], &high = summary->variants[5*j+3];
-    auto &list = sr_trs[i][3*j];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeTrsInfo(&low[selement.first], &high[selement.second], vptr, summary, ref);
-        ++vptr;
-    }
-}
-void varsearch::makeTrsCPInfoList(int i, int j, int v) {
-    auto &low = summary->variants[5*i+3], &high = summary->variants[5*j+3];
-    auto &list = sr_trs[i][3*j];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeTrsInfo(&low[selement.first], &high[selement.second], vptr, summary, ref);
-        calcTrsCp(vptr, summary, background, cnan, vpar);
-        ++vptr;
-    }
-}
-
-//TrsIns///////////
-//  1 2     2'1' //
-// -> ->   -> -> //
-//  2 1     1'2' //
-// -> ->   -> -> //
-///////////////////
-void varsearch::makeTrsInsList1(int i, int j) {
-    auto &low = summary->variants[5*i+3], &high = summary->variants[5*j+3];
-    auto &list = sr_trs[i][3*j+1];
-    auto &lidx = summary->trsidx[i][j], &hidx = summary->trsidx[j][i];
-    if (!vpar->srv_par.detect_comp_var[0] || low.empty() || high.empty()) return;
-    auto lbeg = low.begin()+lidx[0];
-    auto hbeg = high.begin()+hidx[0];
-    if (lbeg->pos2.idx != j || hbeg->pos2.idx != i) return;
-    for (auto lit = lbeg; lit < low.end(); ++lit) {
-        if (j < lit->pos2.idx) break;
-        hbeg = high.begin()+hidx[lit->pos2.pos>>14];
-        for (auto hit = hbeg; hit < high.end(); ++hit) {
-            if (i < hit->pos2.idx) break;
-            if (srVarCheck1(3, *lit, vpar) &&
-                srVarCheck1(3, *hit, vpar) &&
-                srVarCheck2(0, *lit, *hit, vpar) &&
-                lit->pos2.pos < hit->pos1.pos &&
-                lit->pos1.pos-vpar->max_dist <= hit->pos2.pos &&
-                (vpar->min_length[0] <= hit->pos2.pos-lit->pos1.pos ||
-                 vpar->min_length[1] <= hit->pos1.pos-lit->pos2.pos))
-                list.add(std::make_pair(lit-low.begin(), hit-high.begin()));
-        }
-    }
-}
-void varsearch::makeTrsInsList2(int i, int j) {
-    auto &low = summary->variants[5*j+3], &high = summary->variants[5*i+3];
-    auto &list = sr_trs[i][3*j+1];
-    auto &lidx = summary->trsidx[j][i], &hidx = summary->trsidx[i][j];
-    if (!vpar->srv_par.detect_comp_var[0] || low.empty() || high.empty()) return;
-    auto lbeg = low.begin()+lidx[0];
-    auto hbeg = high.begin()+hidx[0];
-    if (lbeg->pos2.idx != i || hbeg->pos2.idx != j) return;
-    for (auto hit = hbeg; hit < high.end(); ++hit) {
-        if (j < hit->pos2.idx) break;
-        lbeg = low.begin()+lidx[hit->pos2.pos>>14];
-        for (auto lit = lbeg; lit < low.end(); ++lit) {
-            if (j < lit->pos2.idx) break;
-            if (srVarCheck1(3, *lit, vpar) &&
-                srVarCheck1(3, *hit, vpar) &&
-                srVarCheck2(0, *lit, *hit, vpar) &&
-                hit->pos2.pos < lit->pos1.pos &&
-                hit->pos1.pos-vpar->max_dist <= lit->pos2.pos &&
-                (vpar->min_length[0] <= lit->pos2.pos-hit->pos1.pos ||
-                 vpar->min_length[1] <= lit->pos1.pos-hit->pos2.pos))
-                list.add(std::make_pair(hit-high.begin(), lit-low.begin()));
-        }
-    }
-}
-inline void makeTrsInsInfo(variant_t *var1, variant_t *var2, varinfo_t *vi, sbamsummary *sum, sdnafile *ref) {
-    vi->var_method = SPLIT_READ_VARIANT;
-    vi->variant = *var1;
-    vi->variant.type |= SB_INSERTION;
-    vi->variant.pos1.len = var2->pos2.pos-var1->pos1.pos-1;
-    if (0 < vi->variant.pos1.len) {
-        vi->variant.pos1.pos++;
-        vi->variant.type |= SB_DELETION;
-    }
-    else {
-        vi->variant.pos1.pos = var2->pos2.pos;
-        vi->variant.pos1.len = 1;
-    }
-    vi->variant.pos2.len = var2->pos1.pos-var1->pos2.pos+1;
-    vi->variant.pos1.setName(ref->name(vi->variant.pos1.idx));
-    vi->variant.pos2.setName(ref->name(vi->variant.pos2.idx));
-    combinate(vi, var2);
-    vi->cp.frequency = 2.0*(vi->variant.nread+vi->variant.pread)/
-    (sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos+vi->variant.pos1.len)/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][vi->variant.pos2.pos/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][(vi->variant.pos2.pos+vi->variant.pos2.len-1)/sum->bin]);
-    if (1.0f < vi->cp.frequency) vi->cp.frequency = 1.0;
-    oneStart(vi);
-    oneStart(vi);
-}
-void varsearch::makeTrsInsInfoList(int i, int j, int v, int k) {
-    auto &trs1 = summary->variants[5*i+3], &trs2 = summary->variants[5*j+3];
-    auto &list = sr_trs[i][3*j+k];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeTrsInfo((k==1?&trs1[selement.first]:&trs2[selement.first]),
-                    (k==1?&trs2[selement.second]:&trs1[selement.second]), vptr, summary, ref);
-        ++vptr;
-    }
-}
-void varsearch::makeTrsInsCPInfoList(int i, int j, int v, int k) {
-    auto &trs1 = summary->variants[5*i+3], &trs2 = summary->variants[5*j+3];
-    auto &list = sr_trs[i][3*j+k];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeTrsInfo((k==1?&trs1[selement.first]:&trs2[selement.first]),
-                    (k==1?&trs2[selement.second]:&trs1[selement.second]), vptr, summary, ref);
-        calcInDelCp(vptr, summary, background, cnan, vpar);
-        ++vptr;
-    }
-}
-
-//TrsInv///////////////////////////
-//          1 2     2 1     1 2  //
-//         -> <-   -> <- = -> <- //
-//           x       x           //
-// <- -> = <- ->   <- ->         //
-//  1'2'    2'1'    1'2'         //
-///////////////////////////////////
-void varsearch::makeTrsInvList(int i, int j) {
-    auto &tinv = summary->variants[5*i+4];
-    auto &list = sr_trinvs[i][3*j];
-    auto &fidx = summary->trinvidx[i][2*j], &ridx = summary->trinvidx[i][2*j+1];
-    if (!vpar->srv_par.detect_comp_var[3] || tinv.empty()) return;
-    auto fbeg = tinv.begin()+fidx[0];
-    auto rbeg = tinv.begin()+ridx[0];
-    if (fbeg->pos2.idx != j || rbeg->pos2.idx != j || fbeg->pos1.dir || rbeg->pos2.dir) return;
-    for (auto tit = fbeg; tit < tinv.end(); ++tit) {
-        if (j < tit->pos2.idx || tit->pos1.dir) break;
-        rbeg = tinv.begin()+ridx[(tit->pos1.pos-vpar->max_dist)>>14];
-        for (auto tit_ = rbeg; tit_ < tinv.end(); ++tit_) {
-            if (j < tit_->pos2.idx || tit_->pos2.dir) break;
-            if (srVarCheck1(4, *tit, vpar) &&
-                srVarCheck1(4, *tit_, vpar) &&
-                srVarCheck2(3, *tit, *tit_, vpar) &&
-                tit->pos1.pos-vpar->max_dist <= tit_->pos1.pos &&
-                tit->pos2.pos-vpar->max_dist <= tit_->pos2.pos)
-                list.add(std::make_pair(tit-tinv.begin(), tit_-tinv.begin()));
-        }
-    }
-}
-inline void makeTrsInvInfo(variant_t *var1, variant_t *var2, varinfo_t *vi, sbamsummary *sum, sdnafile *ref) {
-    vi->var_method = SPLIT_READ_VARIANT;
-    vi->variant = *var1;
-    variant_t var_ = *var2;
-    var_.comp();
-    vi->variant.pos1.len = var_.pos2.pos-var1->pos1.pos-1;
-    if (0 < vi->variant.pos1.len) vi->variant.pos1.pos++;
-    else {
-        vi->variant.pos1.pos = var_.pos2.pos;
-        vi->variant.pos1.len = 0;
-    }
-    vi->variant.pos2.len = var_.pos1.pos-var1->pos2.pos-1;
-    if (0 < vi->variant.pos2.len) vi->variant.pos2.pos++;
-    else {
-        vi->variant.pos2.pos = var_.pos1.pos;
-        vi->variant.pos2.len = 0;
-    }
-    if (vi->variant.pos1.len || vi->variant.pos2.len)
-        vi->variant.type |= SB_DELETION;
-    vi->variant.pos1.setName(ref->name(vi->variant.pos1.idx));
-    vi->variant.pos2.setName(ref->name(vi->variant.pos2.idx));
-    combinate(vi, &var_);
-    vi->cp.frequency = 2.0*(vi->variant.nread+vi->variant.pread)/
-    (sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos+vi->variant.pos1.len)/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][(vi->variant.pos2.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][(vi->variant.pos2.pos+vi->variant.pos2.len)/sum->bin]);
-    if (1.0f < vi->cp.frequency) vi->cp.frequency = 1.0;
-    oneStart(vi);
-}
-void varsearch::makeTrsInvInfoList(int i, int j, int v) {
-    auto &tinv = summary->variants[5*i+4];
-    auto &list = sr_trinvs[i][3*j];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeTrsInvInfo(&tinv[selement.first], &tinv[selement.second], vptr, summary, ref);
-        ++vptr;
-    }
-}
-void varsearch::makeTrsInvCPInfoList(int i, int j, int v) {
-    auto &tinv = summary->variants[5*i+4];
-    auto &list = sr_trinvs[i][3*j];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeTrsInvInfo(&tinv[selement.first], &tinv[selement.second], vptr, summary, ref);
-        calcTrsCp(vptr, summary, background, cnan, vpar);
-        ++vptr;
-    }
-}
-
-//TrsInvIns//////////////////
-//  1 2'    2 1'      1'2  //
-// -> <-   <- ->  =  <- -> //
-//  1'2     2 1'      1 2' //
-// -> <- = -> <-     <- -> //
-/////////////////////////////
-void varsearch::makeTrsInvInsList1(int i, int j) {
-    auto &tinv = summary->variants[5*i+4];
-    auto &list = sr_trinvs[i][3*j+1];
-    auto &fidx = summary->trinvidx[i][2*j], &ridx = summary->trinvidx[i][2*j+1];
-    if (!vpar->srv_par.detect_comp_var[0] || tinv.empty()) return;
-    auto fbeg = tinv.begin()+fidx[0];
-    auto rbeg = tinv.begin()+ridx[0];
-    if (fbeg->pos2.idx != j || rbeg->pos2.idx != j || fbeg->pos1.dir || rbeg->pos2.dir) return;
-    for (auto tit = fbeg; tit < tinv.end(); ++tit) {
-        if (j < tit->pos2.idx || tit->pos1.dir) break;
-        rbeg = tinv.begin()+ridx[(tit->pos1.pos-vpar->max_dist)>>14];
-        for (auto tit_ = rbeg; tit_ < tinv.end(); ++tit_) {
-            if (j < tit_->pos2.idx || tit_->pos2.dir) break;
-            if (srVarCheck1(4, *tit, vpar) &&
-                srVarCheck1(4, *tit_, vpar) &&
-                srVarCheck2(0, *tit, *tit_, vpar) &&
-                tit_->pos2.pos < tit->pos2.pos &&
-                tit->pos1.pos-vpar->max_dist <= tit_->pos1.pos &&
-                (vpar->min_length[0] <= tit_->pos1.pos-tit->pos1.pos ||
-                 vpar->min_length[1] <= tit->pos2.pos-tit_->pos2.pos+1))
-                list.add(std::make_pair(tit-tinv.begin(), tit_-tinv.begin()));
-        }
-    }
-}
-void varsearch::makeTrsInvInsList2(int i, int j) {
-    auto &tinv = summary->variants[5*i+4];
-    auto &list = sr_trinvs[i][3*j+2];
-    auto &fidx = summary->trinvidx[i][2*j], &ridx = summary->trinvidx[i][2*j+1];
-    if (!vpar->srv_par.detect_comp_var[0] || tinv.empty()) return;
-    auto fbeg = tinv.begin()+fidx[0];
-    auto rbeg = tinv.begin()+ridx[0];
-    if (fbeg->pos2.idx != j || rbeg->pos2.idx != j || fbeg->pos1.dir || rbeg->pos2.dir) return;
-    for (auto tit = fbeg; tit < tinv.end(); ++tit) {
-        if (j < tit->pos2.idx || tit->pos1.dir) break;
-        for (auto tit_ = rbeg; tit_ < tinv.end(); ++tit_) {
-            if (j < tit_->pos2.idx || tit_->pos2.dir || tit->pos1.pos < tit_->pos1.pos) break;
-            if (srVarCheck1(4, *tit, vpar) &&
-                srVarCheck1(4, *tit_, vpar) &&
-                srVarCheck2(0, *tit, *tit_, vpar) &&
-                tit->pos2.pos-vpar->max_dist <= tit_->pos2.pos &&
-                (vpar->min_length[0] <= tit_->pos2.pos-tit->pos2.pos ||
-                 vpar->min_length[1] <= tit->pos1.pos-tit_->pos1.pos+1))
-                list.add(std::make_pair(tit_-tinv.begin(), tit-tinv.begin()));
-        }
-    }
-}
-void makeTrsInvInsInfo(variant_t *var1, variant_t *var2, varinfo_t *vi, sbamsummary *sum, sdnafile *ref) {
-    vi->var_method = SPLIT_READ_VARIANT;
-    variant_t var_;
-    if (var1->pos1.dir) {
-        var_ = *var1;
-        vi->variant = *var2;
-        vi->variant.comp();
-    }
-    else {
-        vi->variant = *var1;
-        var_ = *var2;
-        var_.comp();
-    }
-    vi->variant.type |= SB_INSERTION;
-    vi->variant.pos1.len = var_.pos2.pos-vi->variant.pos1.pos-1;
-    if (0 < vi->variant.pos1.len) {
-        vi->variant.pos1.pos++;
-        vi->variant.type |= SB_DELETION;
-    }
-    else {
-        vi->variant.pos1.pos = var_.pos2.pos;
-        vi->variant.pos1.len = 1;
-    }
-    vi->variant.pos2.len = vi->variant.pos2.pos-var_.pos1.pos+1;
-    vi->variant.pos2.pos = var_.pos1.pos;
-    vi->variant.pos1.setName(ref->name(vi->variant.pos1.idx));
-    vi->variant.pos2.setName(ref->name(vi->variant.pos2.idx));
-    combinate(vi, var2);
-    vi->cp.frequency = 2.0*(vi->variant.nread+vi->variant.pread)/
-    (sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos-1)/sum->bin]+
-     sum->depth[vi->variant.pos1.idx][(vi->variant.pos1.pos+vi->variant.pos1.len)/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][vi->variant.pos2.pos/sum->bin]+
-     sum->depth[vi->variant.pos2.idx][(vi->variant.pos2.pos+vi->variant.pos2.len-1)/sum->bin]);
-    if (1.0f < vi->cp.frequency) vi->cp.frequency = 1.0;
-    oneStart(vi);
-    oneStart(vi);
-}
-void varsearch::makeTrsInvInsInfoList(int i, int j, int v, int k) {
-    auto &tinv = summary->variants[5*i+4];
-    auto &list = sr_trinvs[i][3*j+k];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeTrsInvInsInfo(&tinv[selement.first], &tinv[selement.second], vptr, summary, ref);
-        ++vptr;
-    }
-}
-void varsearch::makeTrsInvInsCPInfoList(int i, int j, int v, int k) {
-    auto &tinv = summary->variants[5*i+4];
-    auto &list = sr_trinvs[i][3*j+k];
-    if (list.empty()) return;
-    auto vptr = &vlist->at(v);
-    sforeach(list) {
-        makeTrsInvInsInfo(&tinv[selement.first], &tinv[selement.second], vptr, summary, ref);
-        calcInDelCp(vptr, summary, background, cnan, vpar);
-        ++vptr;
-    }
-}
-
-
-void varsearch::searchSRVar() {
-    sforeachi(i, *ref) {
-        threads->addTask(&varsearch::makeDelList, this, i);
-        threads->addTask(&varsearch::makeDupList, this, i);
-        threads->addTask(&varsearch::makeInDelList1, this, i);
-        threads->addTask(&varsearch::makeInDelList2, this, i);
-        threads->addTask(&varsearch::makeInvList, this, i);
-        threads->addTask(&varsearch::makeInvInsList1, this, i);
-        threads->addTask(&varsearch::makeInvInsList2, this, i);
-        sforin(j, 0, i) threads->addTask(&varsearch::makeTrsInsList2, this, i, j);
-        sforin(j, i+1, ref->size()) {
-            threads->addTask(&varsearch::makeTrsList, this, i, j);
-            threads->addTask(&varsearch::makeTrsInsList1, this, i, j);
-            threads->addTask(&varsearch::makeTrsInvList, this, i, j);
-            threads->addTask(&varsearch::makeTrsInvInsList1, this, i, j);
-            threads->addTask(&varsearch::makeTrsInvInsList2, this, i, j);
-        }
-    }
-    threads->complete();
-}
-void varsearch::makeSRVInfo() {
-    int voffset = 0;
-    sforeachi(i, *ref) {
-        threads->addTask(&varsearch::makeDelInfoList, this, i, voffset); voffset += sr_dels[i].size();
-        threads->addTask(&varsearch::makeDupInfoList, this, i, voffset); voffset += sr_dups[i].size();
-        threads->addTask(&varsearch::makeInDelInfoList, this, i, voffset, 0); voffset += sr_indels[2*i].size();
-        threads->addTask(&varsearch::makeInDelInfoList, this, i, voffset, 1); voffset += sr_indels[2*i+1].size();
-        threads->addTask(&varsearch::makeInvInfoList, this, i, voffset); voffset += sr_invs[3*i].size();
-        threads->addTask(&varsearch::makeInvInsInfoList, this, i, voffset, 1); voffset += sr_invs[3*i+1].size();
-        threads->addTask(&varsearch::makeInvInsInfoList, this, i, voffset, 2); voffset += sr_invs[3*i+2].size();
-        sforeachi(j, *ref) {
-            threads->addTask(&varsearch::makeTrsInfoList, this, i, j, voffset); voffset += sr_trs[i][3*j].size();
-            threads->addTask(&varsearch::makeTrsInsInfoList, this, i, j, voffset, 1); voffset += sr_trs[i][3*j+1].size();
-            threads->addTask(&varsearch::makeTrsInsInfoList, this, i, j, voffset, 2); voffset += sr_trs[i][3*j+2].size();
-            threads->addTask(&varsearch::makeTrsInvInfoList, this, i, j, voffset); voffset += sr_trinvs[i][3*j].size();
-            threads->addTask(&varsearch::makeTrsInvInsInfoList, this, i, j, voffset, 1); voffset += sr_trinvs[i][3*j+1].size();
-            threads->addTask(&varsearch::makeTrsInvInsInfoList, this, i, j, voffset, 2); voffset += sr_trinvs[i][3*j+2].size();
-        }
-    }
-    threads->complete();
-}
-void varsearch::makeCNSRVInfo() {
-    int voffset = 0;
-    sforeachi(i, *ref) {
-        threads->addTask(&varsearch::makeDelCPInfoList, this, i, voffset); voffset += sr_dels[i].size();
-        threads->addTask(&varsearch::makeDupCPInfoList, this, i, voffset); voffset += sr_dups[i].size();
-        threads->addTask(&varsearch::makeInDelCPInfoList, this, i, voffset, 0); voffset += sr_indels[2*i].size();
-        threads->addTask(&varsearch::makeInDelCPInfoList, this, i, voffset, 1); voffset += sr_indels[2*i+1].size();
-        threads->addTask(&varsearch::makeInvCPInfoList, this, i, voffset); voffset += sr_invs[3*i].size();
-        threads->addTask(&varsearch::makeInvInsCPInfoList, this, i, voffset, 1); voffset += sr_invs[3*i+1].size();
-        threads->addTask(&varsearch::makeInvInsCPInfoList, this, i, voffset, 2); voffset += sr_invs[3*i+2].size();
-        sforeachi(j, *ref) {
-            threads->addTask(&varsearch::makeTrsCPInfoList, this, i, j, voffset); voffset += sr_trs[i][3*j].size();
-            threads->addTask(&varsearch::makeTrsInsCPInfoList, this, i, j, voffset, 1); voffset += sr_trs[i][3*j+1].size();
-            threads->addTask(&varsearch::makeTrsInsCPInfoList, this, i, j, voffset, 2); voffset += sr_trs[i][3*j+2].size();
-            threads->addTask(&varsearch::makeTrsInvCPInfoList, this, i, j, voffset); voffset += sr_trinvs[i][3*j].size();
-            threads->addTask(&varsearch::makeTrsInvInsCPInfoList, this, i, j, voffset, 1); voffset += sr_trinvs[i][3*j+1].size();
-            threads->addTask(&varsearch::makeTrsInvInsCPInfoList, this, i, j, voffset, 2); voffset += sr_trinvs[i][3*j+2].size();
-        }
-    }
-    threads->complete();
-}
-                             
-void varsearch::search(int mode) {
-    //if(mode&CNV_DETECTION || mode&CNSRV_DETECTION) cnan->search();
-    if(mode&SRV_DETECTION || mode&CNSRV_DETECTION) {
-        //if(background) summary->subtract(background, vpar);
-        //else summary->varindex(&par->var_par);
-        searchSRVar();
-        int total = 0;
-        sforeachi(i, *ref) {
-            total += sr_dels[i].size();
-            total += sr_dups[i].size();
-            total += sr_indels[2*i].size();
-            total += sr_indels[2*i+1].size();
-            total += sr_invs[3*i].size();
-            total += sr_invs[3*i+1].size();
-            total += sr_invs[3*i+2].size();
-            sforeachi(j, *ref) {
-                total += sr_trs[i][3*j].size();
-                total += sr_trs[i][3*j+1].size();
-                total += sr_trs[i][3*j+2].size();
-                total += sr_trinvs[i][3*j].size();
-                total+= sr_trinvs[i][3*j+1].size();
-                total += sr_trinvs[i][3*j+2].size();
-            }
-        }
-        vlist->resize(total);
-        if (mode&CNSRV_DETECTION) makeCNSRVInfo();
-        else makeSRVInfo();
-    }
-    if(mode&CNV_DETECTION) cnan->makelist(vlist);
-    vlist->reorder();
-}
-
-void varsearch::init() {
-    //if(cnan) cnan->init();
-    sforeachi(i, *ref) {
-        sr_dels[i].clear();
-        sr_dups[i].clear();
-        sr_indels[2*i].clear();
-        sr_indels[2*i+1].clear();
-        sr_invs[3*i].clear();
-        sr_invs[3*i+1].clear();
-        sr_invs[3*i+2].clear();
-        sforeachi(j, *ref) {
-            sr_trs[i][3*j].clear();
-            sr_trs[i][3*j+1].clear();
-            sr_trs[i][3*j+2].clear();
-            sr_trinvs[i][3*j].clear();
-            sr_trinvs[i][3*j+1].clear();
-            sr_trinvs[i][3*j+2].clear();
-        }
-    }
+template<class Content>
+inline void clearCandidates(Array<Content>* array) { array->clear(); }
+void stk::VarSearch::reset() {
+	if (threads->isWorking()) threads->complete();
+	cna.reset();
+	sfor(candidates1) threads->addTask(clearCandidates<SVar*>, $.ptr());
+	sfor(candidates2) threads->addTask(clearCandidates<Pair<SVar*, SVar*>>, $.ptr());
+	sfor(primary) threads->addTask(clearCandidates<SPointer<Variant>>, $.ptr());
+	threads->complete();
+	variants.clearAll();
 }

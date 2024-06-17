@@ -1,262 +1,208 @@
-#include "analyzer.hpp"
+#include "analyzer.h"
 
-using namespace stk;
-
-const float default_bg = 1.0f;
-
-cn_var_t::cn_var_t() {
-    type = 0;
-    pos = -1;
-    len = 0;
-    sread = 0.0;
-    sread2 = 0.0;
-    bread = 0.0;
-    bread2 = 0.0;
+inline size_t maxLength(SeqList& ref) {
+	size_t sz = 0;
+	sfor(ref) {
+		if (sz < $_.length()) sz = $_.length();
+	}
+	return sz;
 }
-cn_var_t::cn_var_t(const cn_var_t &cnv) {
-    type = cnv.type; pos = cnv.pos; len = cnv.len;
-    sread = cnv.sread; sread2 = cnv.sread2; bread = cnv.bread; bread2 = cnv.bread2;
+/**
+* CNAnalysis implementation
+*/
+stk::CNAnalysis::CNAnalysis() {
+	par = nullptr;
+	status = nullptr;
+	logger = nullptr;
+	smpl = nullptr;
+	ctrl = nullptr;
+};
+stk::CNAnalysis::CNAnalysis(Analyzer* an) : CNAnalysis() { setParam(&an->par); }
+stk::CNAnalysis::~CNAnalysis() {}
+void stk::CNAnalysis::setParam(stk::Param* p) {
+	par = p;
+	status = &par->status;
+	logger = &par->logger;
 }
-cn_var_t::~cn_var_t() {}
-
-bool cn_var_t::operator<(const cn_var_t &cnv) const {
-    return pos < cnv.pos;
+void stk::CNAnalysis::setData(NGSData* data, NGSData* control) {
+	smpl = data;
+	ctrl = control;
 }
-bool cn_var_t::operator==(const cn_var_t &cnv) const {
-    return type == cnv.type && pos == cnv.pos && len == cnv.len;
-}
-
-cnanalysis::cnanalysis(analyzer *a) {
-    vpar = &a->par->var_par;
-    par = &a->par->var_par.cnv_par;
-    ref = a->par->ref;
-    summary = a->summary;
-    background = a->par->bg;
-    threads = &a->threads;
-    variants.resize(ref->size());
-    cnvidx.resize(ref->size());
-    sforeachi(i, *ref) cnvidx[i].resize(((ref->length(i)-1)>>14)+1, -1);
-}
-cnanalysis::~cnanalysis() {}
-/*
-inline bool sequential(cn_var_t &v1, int i, cn_vec &variants, double &ratio, cnvar_param_t *par) {
-    cn_var_t &v2 = variants[i], &v3 = variants[i+1];
-    if (!v2.type && v1.type == v3.type) {
-        if (v1.type == DELETION &&
-            (v1.sread+v2.sread+v3.sread)/(v1.bread+v2.bread+v3.bread)*ratio <= par->del_cp)
-            return true;
-        else if(v1.type == DUPLICATION &&
-                par->dup_cp <= (v1.sread+v2.sread+v3.sread)/(v1.bread+v2.bread+v3.bread)*ratio)
-            return true;
-    }
-    return false;
-}
- */
-inline float cpyRatio(float *sdp, float *bdp, float &ratio) {
-    if (bdp) {
-        if (*bdp < SMATH_FEPS) return INFINITY;
-        return (*sdp)/(*bdp)*ratio;
-    }
-    else return (*sdp)*ratio;
-}
-inline bool isLCVInit(float &cp, float &edge, cnvar_param_t *par) {
-    return cp <= par->del_cp && edge <= -par->cp_diff;
-}
-inline bool isLCV(float &cp, cnvar_param_t *par) { return cp <= par->del_cp; }
-
-inline bool isLCVEnd(float &cp, float &edge, cnvar_param_t *par) {
-    return par->del_cp < cp || par->cp_diff < smath::abs(edge);
-}
-inline bool isHCVInit(float &cp, float &edge, cnvar_param_t *par) {
-    return par->dup_cp <= cp && par->cp_diff <= edge;
-}
-inline bool isHCV(float &cp, cnvar_param_t *par) { return par->dup_cp <= cp; }
-inline bool isHCVEnd(float &cp, float &edge, cnvar_param_t *par) {
-    return cp < par->dup_cp || par->cp_diff <= edge;
-}
-inline void makeCV(int type, int &idx, float *sdp, float *bdp, int &bin, cn_var_t &cnv) {
-    cnv.type = type;
-    cnv.pos = idx*bin;
-    cnv.len = bin;
-    cnv.sread = (*sdp)*bin;
-    cnv.sread2 = cnv.sread*cnv.sread;
-    cnv.bread = (bdp?(*bdp):1.0f)*bin;
-    cnv.bread2 = cnv.bread*cnv.bread;
-}
-inline void addCP(cn_var_t &cnv, float *sdp, float *bdp, int &bin) {
-    cnv.len += bin;
-    cnv.sread += *sdp;
-    cnv.sread2 += (*sdp)*(*sdp);
-    cnv.bread += bdp?*bdp:1.0f;
-    cnv.bread2 += bdp?(*bdp)*(*bdp):1.0f;
-}
-inline void extendCV(cn_var_t &cnv, float *cp, float &edge, float *sdp, float *bdp, float &ratio,
-                     int &bin, int &idx, int &size, cn_vec &vec, cnvar_param_t *par) {
-    switch (cnv.type) {
-        case SB_DELETION:
-        {
-            while (idx < size) {
-                cp[1] = cpyRatio(sdp, bdp, ratio);
-                edge = cp[1]-cp[0];
-                if (isLCVEnd(cp[1], edge, par)) {
-                    vec.add(cnv);
-                    if (isLCV(cp[1], par)) {
-                        makeCV(SB_DELETION, idx, sdp, bdp, bin, cnv);
-                        extendCV(cnv, cp, edge, sdp, bdp, ratio, bin, idx, size, vec, par);
-                    }
-                    break;
-                }
-                else addCP(cnv, sdp, bdp, bin);
-                ++idx; ++sdp; if(bdp) ++bdp; cp[0] = cp[1];
-            }
-            break;
-        }
-        case SB_DUPLICATION:
-        {
-            while (idx < size) {
-                cp[1] = cpyRatio(sdp, bdp, ratio);
-                edge = cp[1]-cp[0];
-                if (isHCVEnd(cp[1], edge, par)) {
-                    vec.add(cnv);
-                    if (isHCV(cp[1], par)) {
-                        
-                        std::cout<<"HCV:"<<cp[0]<<"-"<<cp[1]<<std::endl;
-                        
-                        makeCV(SB_DUPLICATION, idx, sdp, bdp, bin, cnv);
-                        extendCV(cnv, cp, edge, sdp, bdp, ratio, bin, idx, size, vec, par);
-                    }
-                    break;
-                }
-                else addCP(cnv, sdp, bdp, bin);
-                ++idx; ++sdp; if(bdp) ++bdp; cp[0] = cp[1];
-            }
-            break;
-        }
-        default:
-        {
-            while (idx < size) {
-                cp[1] = cpyRatio(sdp, bdp, ratio);
-                edge = cp[1]-cp[0];
-                if (isLCVInit(cp[1], edge, par) || isHCVInit(cp[1], edge, par)) {
-                    
-                    std::cout<<"NCV:"<<cp[0]<<"-"<<cp[1]<<std::endl;
-                    
-                    
-                    vec.add(cnv);
-                    break;
-                }
-                else addCP(cnv, sdp, bdp, bin);
-                ++idx; ++sdp; if(bdp) ++bdp; cp[0] = cp[1];
-            }
-            break;
-        }
-    }
+/**
+* Get depth info
+*/
+void stk::CNAnalysis::depth(smath::Vector<svecf> &values) {
+	auto it = values.begin();
+	srange range;
+	//
+	if (par->target.empty()) {
+		sfori(par->reference) {
+			$_.resize((par->reference[i].length() - 1) / par->depth_bin + 1);
+			range = srange(0, par->depth_bin - 1);
+			sforeach(val, $_) {
+				if (par->reference[i].length() <= range.end) range.end = par->reference[i].length() - 1;
+				val = count(i, range);
+				range.shift(par->depth_bin);
+			}
+			$NEXT;
+		}
+	}
+	else {
+		sfori(par->target) {
+			sforeach(target, par->target[i]) {
+				$_.resize(target.length() / par->depth_bin + 1);
+				range = srange(target.begin, target.begin + par->depth_bin - 1);
+				sforeach(val, $_) {
+					if (target.end < range.end) range.end = target.end;
+					val = count(i, range);
+					range.shift(par->depth_bin);
+				}
+				$NEXT;
+			}
+		}
+	}
 }
 
-void cnanalysis::searchCNV(int r) {
-    if (!summary->depth_size[r]) return;
-    int size = summary->depth_size[r], idx = 0, bin = summary->bin;
-    auto sdp = summary->depth[r].data(),
-    bdp = background?background->depth[r].data():nullptr;
-    float cp[2], edge;
-    cn_var_t cnv;
-    cp[0] = 1.0;
-    cp[1] = cpyRatio(sdp, bdp, ratio);
-    edge = cp[1]-cp[0];
-    while (idx < size) {
-        if (isLCVInit(cp[1], edge, par))
-            makeCV(SB_DELETION, idx, sdp, bdp, bin, cnv);
-        else if (isHCVInit(cp[1], edge, par))
-            makeCV(SB_DUPLICATION, idx, sdp, bdp, bin, cnv);
-        else makeCV(0, idx, sdp, bdp, bin, cnv);
-        ++idx; ++sdp; if(bdp) ++bdp; cp[0] = cp[1];
-        extendCV(cnv, cp, edge, sdp, bdp, ratio, bin, idx, size, variants[r], par);
-    }
+/**
+* Get copy number
+*/
+void stk::CNAnalysis::copynum(smath::Vector<svecf>& values) {
+	auto it = values.begin();
+	srange range;
+	//
+	if (par->target.empty()) {
+		sfori(par->reference) {
+			$_.resize((par->reference[i].length() - 1) / par->depth_bin + 1);
+			range = srange(0, par->depth_bin - 1);
+			sforeach(val, $_) {
+				if (par->reference[i].length() <= range.end) range.end = par->reference[i].length() - 1;
+				val = count(i, range) / (float)smpl->summary.avedp /
+					(ctrl ? (count(i, range, true) / (float)ctrl->summary.avedp) : 1.f);
+				range.shift(par->depth_bin);
+			}
+			$NEXT;
+		}
+	}
+	else {
+		sfori(par->target) {
+			sforeach(target, par->target[i]) {
+				$_.resize(target.length() / par->depth_bin + 1);
+				range = srange(target.begin, target.begin + par->depth_bin - 1);
+				sforeach(val, $_) {
+					if (target.end < range.end) range.end = target.end;
+					val = count(i, range) / smpl->summary.avedp /
+						(ctrl ? (count(i, range, true) / (float)ctrl->summary.avedp) : 1.f);
+					range.shift(par->depth_bin);
+				}
+				$NEXT;
+			}
+		}
+	}
 }
 
-void cnanalysis::search() {
-    if (SMATH_FEPS < summary->average_depth)
-        ratio = (background?background->average_depth:default_bg)/summary->average_depth;
-    else return;
-    
-    
-    sforeachi(i, *ref) searchCNV(i);
-    /*
-    sforeachi(i, *ref) threads->addTask(&cnanalysis::searchCNV, this, i);
-    threads->complete();
-     */
+float _count(int bin, svecf* depth, const srange& range) {
+	auto rng = srange(range.begin / bin, range.end / bin);
+	if (rng.begin == rng.end) return depth->at(rng.begin);
+	else {
+		double value = 0;
+		auto dp = depth->data() + rng.begin;
+		value += (double)(*dp) * ((rng.begin + 1) * bin - range.begin);
+		++rng.begin; ++dp;
+		while (rng.begin < rng.end) {
+			value += (double)(*dp) * bin; ++rng.begin; ++dp;
+		}
+		value += (double)(*dp) * (range.end - rng.begin * bin + 1);
+		return (float)(value / range.length(true));
+	}
 }
+float stk::CNAnalysis::count(int idx, const srange &range, bool control) {
+	if (!smpl) throw NullException(nullErrorText("NGSData object"));
+	if (control && !ctrl) throw NullException(nullErrorText("Control data object"));
+	return _count(smpl->summary.bin, &(control ? ctrl : smpl)->depth[idx], range);
+}
+float stk::CNAnalysis::ncount(int idx, const srange& range, bool control) {
+	if (!smpl) throw NullException(nullErrorText("NGSData object"));
+	if (control && !ctrl) throw NullException(nullErrorText("Control data object"));
+	return _count(smpl->summary.bin, &normalized[control?1:0][idx], range);
+}
+float stk::CNAnalysis::copy(int idx, const srange& range) {
+	return _count(smpl->summary.bin, &copies[idx], range);
+}
+void _normalize(svecf* dp, svecf *ndp, sngs::Summary *sum, stk::Param *par) {
+	if (dp) { 
+		if (sum->avedp < snum::D_EPS) throw DivZeroException("Average depth was zero or too small.");
+		sfor2(*dp, *ndp) $_2 = $_1 / sum->avedp; 
+	}
+	else sfor(*ndp) $_ = 1.f;
+}
+void _copy(svecf *ndp1, svecf *ndp2, svecf *cp, CN_METHOD method) {
+	auto p1 = ndp1->data(),
+		p2 = ndp2->data(),
+		v = cp->data();
+	auto n = ndp1->size();
+	sforin(i, 0, n) { 
+		if (*p2 < snum::F_EPS) *v = (*p1);
+		else *v = (*p1) / (*p2); 
+		++v; ++p1; ++p2; 
+	}
+	switch (method) {
+	case CN_METHOD::RAW:
+		return;
+	default:
+		break;
+	}
+}
+void stk::CNAnalysis::analyze() {
+	auto& num = smpl->summary.refnum;
+	normalized[0].resize(num);
+	normalized[1].resize(num);
+	copies.resize(num);
+	// Noramalize
+	sforin(i, 0, num) {
+		normalized[0][i].resize(smpl->depth[i].size());
+		normalized[1][i].resize(smpl->depth[i].size());
+		par->threads.addTask(_normalize, &smpl->depth[i], &normalized[0][i], &smpl->summary, par);
+		//_normalize(&smpl->depth[i], &normalized[0][i], &smpl->summary, par);		
+		if (ctrl) {
+			par->threads.addTask(_normalize, &ctrl->depth[i], &normalized[1][i], &ctrl->summary, par);
+			//_normalize(&ctrl->depth[i], &normalized[1][i], &ctrl->summary, par);
+		}
+		else _normalize(nullptr, &normalized[1][i], nullptr, nullptr);
+	}
+	par->threads.complete();
+	// Copynumber calc.
+	sforin(i, 0, num) {
+		copies[i].resize(smpl->depth[i].size());
+		par->threads.addTask(_copy, &normalized[0][i], &normalized[1][i], &copies[i], par->varp.cnvp.method);
+		//_copy(&normalized[0][i], &normalized[1][i], &copies[i], par->varp.cnvp.method);
+	}
+	par->threads.complete();
+}
+void stk::CNAnalysis::analyze(CNData& cnd, int r, srange range) {
+	// Correction for AT/GC ratio etc...
+	float correct = 1.f;
 
-void cnanalysis::makelist(varlist *vl) {
-    sforeachi(r, *ref) {
-        cn_vec &cnvs = variants[r];
-        for (int i = 0; i < cnvs.size()-2; ++i) {
-            if (!cnvs[i].type) continue;
-            else {
-                cn_var_t v = cnvs[i];
-                /*
-                if(sequential(v, i+1, cnvs, ratio, par)) {
-                    while (i < cnvs.size()-2 && sequential(v, i+1, cnvs, ratio, par)) {
-                        v += cnvs[++i];
-                        v += cnvs[++i];
-                    }
-                }
-                 */
-                if ((v.type == SB_DELETION && vpar->min_length[0] <= v.len) ||
-                    (v.type == SB_DUPLICATION && vpar->min_length[1] <= v.len)) {
-                    varinfo_t vi;
-                    vi.var_method = COPY_NUM_VARIANT;
-                    vi.variant.type = v.type;
-                    vi.variant.pos1.idx = r;
-                    vi.variant.pos1.pos = v.pos*summary->bin+1;
-                    if(v.pos+v.len == summary->depth_size[r])
-                        vi.variant.pos1.len = ref->length(r)-vi.variant.pos1.pos+1;
-                    else
-                        vi.variant.pos1.len = v.len*summary->bin;
-                    vi.cp.copy[0] = (double)(v.sread*summary->bin)/vi.variant.pos1.len;
-                    vi.cp.bgcopy[0] = background?(double)(v.bread*summary->bin)/vi.variant.pos1.len:default_bg;
-                    vi.cp.copy[1] = vi.cp.copy[0]/summary->average_depth;
-                    vi.cp.bgcopy[1] = (background&&0.0<background->average_depth)?
-                    vi.cp.bgcopy[0]/background->average_depth:default_bg;
-                    vi.cp.copy[2] = vi.cp.copy[1]/vi.cp.bgcopy[1];
-                    if (vi.variant.type == SB_DELETION &&
-                        vi.cp.copy[2] <= par->homo_del_cp) vi.cp.homo = true;
-                    else if (vi.variant.type == SB_INSERTION &&
-                             par->mul_cp <= vi.cp.copy[2]) vi.variant.type = SB_MULTIPLICATION;
-                    vl->add(vi);
-                }
-            }
-        }
-    }
+	cnd.depth[0] = count(r, range, smpl);
+	cnd.ndepth[0] = cnd.depth[0] / (float)smpl->summary.avedp * correct;
+	if (ctrl) {
+		cnd.depth[1] = count(r, range, ctrl);
+		cnd.ndepth[1] = cnd.depth[1] / (float)ctrl->summary.avedp * correct;
+	}
+	else {
+		cnd.depth[1] = 1.f;
+		cnd.ndepth[1] = 1.f;
+	}
+	// Copy number value
+	switch (par->varp.cnvp.method) {
+	case CN_METHOD::RAW:
+		cnd.copy = cnd.ndepth[0] / cnd.ndepth[1];
+		break;
+	default:
+		break;
+	}
 }
-
-float cnanalysis::depthIn(int32_t ref, int32_t pos, int32_t len, bool bg) {
-    srange vrange(pos, pos+len-1), cnvrange(-1, -1);
-    double val = 0.0f;
-    auto it = variants[ref].begin()+cnvidx[ref][pos>>14];
-    while (it < variants[ref].end()) {
-        if (vrange.end < it->pos) break;
-        if (vrange.overlap(srange(it->pos, it->pos+it->len-1))) {
-            if (cnvrange.begin < 0) cnvrange.begin = it->pos;
-            cnvrange.end = it->pos+it->len-1;
-            if (bg) val += it->bread;
-            else val += it->sread;
-        }
-        ++it;
-    }
-    if (cnvrange.begin < vrange.begin)
-        val -= summary->totalDepthIn(ref, cnvrange.begin, cnvrange.begin-cnvrange.begin);
-    else if (vrange.begin < cnvrange.begin)
-        val += summary->totalDepthIn(ref, pos, cnvrange.begin-cnvrange.begin);
-    if (cnvrange.end < vrange.end)
-        val += summary->totalDepthIn(ref, cnvrange.end, vrange.end-cnvrange.end);
-    else if (vrange.end < cnvrange.end)
-        val -= summary->totalDepthIn(ref, vrange.end, cnvrange.end-vrange.end);
-    return val/len;
-}
-void cnanalysis::init() {
-    sforeachi(i, *ref) {
-        variants[i].clear();
-        cnvidx[i].reset(-1);
-    }
+void stk::CNAnalysis::reset() {
+	sfor(normalized[0]) $_.reset(0.f);
+	sfor(normalized[1]) $_.reset(0.f);
+	sfor(copies) $_.reset(0.f);
 }
