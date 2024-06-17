@@ -273,18 +273,6 @@
     },
 
 
-
-
-    "variant-filter": {
-      "brief": "plugin",
-      "description": "Additional filter plugin."
-    },
-    "custom-filter": {
-      "brief": "path-to-script",
-      "description": "Filter script path to call."
-    },
-
-
     "thread": {
       "brief": "num",
       "description": "Maximum thread count."
