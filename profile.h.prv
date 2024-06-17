@@ -1,0 +1,3 @@
+#include "sapp/scuiapp.h"
+extern const slib::String prof_format = "json";
+extern const slib::String app_profile = "%_PROFILE_%";
