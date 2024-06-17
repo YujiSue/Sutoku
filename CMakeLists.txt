@@ -30,5 +30,5 @@ execute_process(
 	COMMAND python MakeProf.py profile.h.prv appinfo.json profile.h
 	WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
 )
-set(CODES main.cpp analyzer.cpp param.cpp util.cpp bamreader.cpp sranalysis.cpp cnanalysis.cpp varindex.cpp varcheck.cpp varsearch.cpp)
+set(CODES main.cpp analyzer.cpp param.cpp util.cpp bamreader.cpp sranalysis.cpp cnanalysis.cpp varcheck.cpp varsearch.cpp)
 add_executable(sutoku ${CODES})
