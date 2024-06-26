@@ -31,15 +31,14 @@ stk::Param::Param() {
 	
 	seqtype = sngs::SEQ_TYPE::SINGLE;
 	seqp.setRefType(DNA_SEQ4);
-	seqp.setSeed(((min_clip / 4) - 1) * 4);
-	seqp.min_match = min_clip * 3 / 4;
+	seqp.setSeed((((int)min_clip / 4) - 1) * 4);
+	seqp.min_match = (int)min_clip * 3 / 4;
 	seqp.max_gap = 2;
 	seqp.max_miss = 2;
 	seqp.ext_threshold = 0.75;
 }
 stk::Param::Param(slib::SDictionary& pref) : stk::Param() { set(pref); }
 stk::Param::~Param() {}
-
 void stk::Param::set(SDictionary &pref) {
 	command = pref["_cmd_"];
 	try {
@@ -52,7 +51,12 @@ void stk::Param::set(SDictionary &pref) {
 				}
 				else {
 					auto bams = pref["bam"].split(",");
-					sforeach(in, bams) { if (sfs::exist(in)) inputs.add(in); }
+					sforeach(in, bams) { 
+						
+						SPrint(in, ":", sfs::exist(in));
+
+						
+						if (sfs::exist(in)) inputs.add(in); }
 				}
 			}
 		}

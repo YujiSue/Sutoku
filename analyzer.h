@@ -87,7 +87,7 @@ namespace stk {
 		~BamReader();
 		void readinfo(BamFile* bam, IOStream& stream);
 		void summary1(int i, BamFile* bam, NGSData* summary, SRAnalysis *svd, vchunk range, bool async);
-		void summary2_(int i, BamFile* bam, NGSData* summary, Array<Map<String, sbam::ReadInfo>>* pairs, SRAnalysis* svd, vchunk range, bool async);
+		void summary2_(int i, BamFile* bam, NGSData* summary, Array<Map<String, Pointer<sbam::ReadInfo>>>* pairs, SRAnalysis* svd, vchunk range, bool async);
 		void summary2(BamFile* bam, NGSData* summary, Array<Map<String, sbam::ReadInfo>> *pairs, SRAnalysis* svd, vchunk range);
 		void summarize(BamFile *bam, NGSData * summary);
 		void totalize(NGSData* summery);

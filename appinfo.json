@@ -73,6 +73,7 @@
         "control",
         "param",
         "outdir",
+        "detect-sv",
         "async-load",
         "paired",
         "depth-bin",
@@ -120,8 +121,11 @@
         "param",
         "outdir",
         "oformat",
-        "prefix",
-        "postfix",
+        "detect-sv",
+        "async-load",
+        "paired",
+        "depth-bin",
+        "ignore-pcrdp",
         "thread",
         "log-dir"
       ],
@@ -235,15 +239,6 @@
       "default": "auto",
       "description": "Output format. The default is 'auto' and depends on the main command."
     },
-    "prefix": {
-      "brief": "string",
-      "description": "Prefix term to modify the result file name."
-    },
-    "postfix": {
-      "brief": "string",
-      "description": "Postfix term to modify the result file name."
-    },
-
     "depth-bin": {
       "type": "num",
       "brief": "size",
@@ -254,7 +249,10 @@
       "description": "Minimum clip size to analyze. "
     },
 
-
+    "detect-sv": {
+      "type": "bool",
+      "description": "Option to analyze split/chimeric reads to detect structure variants (default: false). This flag can also be set in the parameter file."
+    },
     "paired": {
       "type": "bool",
       "description": "Option to analyze as a pired-end sequence (default: false). This flag can also be set in the parameter file."

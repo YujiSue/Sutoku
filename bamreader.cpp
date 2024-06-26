@@ -107,9 +107,9 @@ void _extendRead(sbam::ReadInfo* read, Sequence* ref, AlignExtend* extender) {
 	read->ref.dir = false;
 	extender->extend(ref, &read->seq, read);
 	if (read->query.begin) read->cigars.add(Cigar(scigar::SCLIP, read->query.begin), DIRECTION::HEAD);
-	if (read->query.end < read->seq.size() - 1) read->cigars.add(Cigar(scigar::SCLIP, read->seq.size() - read->query.end - 1));
+	if (read->query.end < read->seq.size() - 1) read->cigars.add(Cigar(scigar::SCLIP, (int)read->seq.size() - read->query.end - 1));
 	read->ref.dir = rev;
-	read->query = srange(0, read->seq.size() - 1);
+	read->query = srange(0, (int)read->seq.size() - 1);
 	extender->reset();
 }
 // Single read summary
@@ -187,7 +187,7 @@ void _correctOverlap(sbam::ReadInfo* read, sbam::ReadInfo* pair) {
 	// Trimming overlap
 	sbio::sutil::trimOver(r1->ref, r1->query, r1->cigars, r2->ref, r2->query, r2->cigars, false);
 	if (midclip && r1->cigars.size() && r1->query.end < r1->seq.size() - 1) {
-		r1->cigars.add(Cigar(scigar::SCLIP, r1->seq.size() - r1->query.end - 1));
+		r1->cigars.add(Cigar(scigar::SCLIP, (int)r1->seq.size() - r1->query.end - 1));
 	}
 	else {
 		// Add empty cigar to mark the read is 
@@ -196,8 +196,7 @@ void _correctOverlap(sbam::ReadInfo* read, sbam::ReadInfo* pair) {
 	}
 }
 // Paired end summary 
-
-void stk::BamReader::summary2_(int refidx, BamFile* bam, NGSData* data, Array<Map<String, sbam::ReadInfo>>* pairs, SRAnalysis* svd, vchunk range, bool async) {
+void stk::BamReader::summary2_(int refidx, BamFile* bam, NGSData* data, Array<Map<String, slib::Pointer<sbam::ReadInfo>>>* pairs, SRAnalysis* svd, vchunk range, bool async) {
 	stk::ReadCounter counter(data, par);
 	sbam::ReadInfo* read = nullptr, * pair = nullptr;
 	AlignExtend extender(&par->seqp);
@@ -234,7 +233,6 @@ void stk::BamReader::summary2_(int refidx, BamFile* bam, NGSData* data, Array<Ma
 				}
 				// Update read count and total length
 				++(data->summary.count[read->ref.idx]);
-				data->summary.bases[read->ref.idx] += read->seq.size();
 				// Update total aligned length
 				data->summary.bases[read->ref.idx] += read->cigars.refSize();
 				// Count depth
@@ -242,8 +240,13 @@ void stk::BamReader::summary2_(int refidx, BamFile* bam, NGSData* data, Array<Ma
 			}
 			else {
 				// Search pair
-				pair = pairs->at(read->next.idx).hasKey(read->name) ?
-					&pairs->at(read->next.idx)[read->name] : nullptr;
+				if (async) {
+					SAutoLock al(par->mlock[read->next.idx]);
+					pair = pairs->at(read->next.idx).hasKey(read->name) ?
+						(sbam::ReadInfo*)pairs->at(read->next.idx)[read->name] : nullptr;
+				}
+				else pair = pairs->at(read->next.idx).hasKey(read->name) ?
+					(sbam::ReadInfo*)pairs->at(read->next.idx)[read->name] : nullptr;
 				// Pairing
 				if (pair) {
 					if (read->ref.dir == pair->ref.dir) {
@@ -289,15 +292,22 @@ void stk::BamReader::summary2_(int refidx, BamFile* bam, NGSData* data, Array<Ma
 					// Remove from buffer
 					pairs->at(read->next.idx).remove(read->name);
 				}
-				else pairs->at(read->ref.idx).set(read->name, *read);
+				else {
+					if (async) {
+						SAutoLock al(par->mlock[read->ref.idx]);
+						pairs->at(read->ref.idx).set(read->name, new sbam::ReadInfo(*read));
+					}
+					else pairs->at(read->ref.idx).set(read->name, new sbam::ReadInfo(*read));
+				}
 			}
 			// Update progress
-			status->current_task[0] = current.file_offset - range.begin.file_offset;
+			status->current_task[async ? refidx : 0] = current.file_offset - range.begin.file_offset;
 		}
 		if (par->detect_sv && status->state == stk::RUNNING) svd->realign();
 	}
 	catch (Exception ex) { SPrint("Error read.", NL, read->toString(), NL, pair->toString()); stk::interruptProc(status, logger, &ex); }
 }
+
 void stk::BamReader::summary2(BamFile* bam, NGSData* data, Array<Map<String, sbam::ReadInfo>> *pairs, SRAnalysis* svd, vchunk range) {
 	stk::ReadCounter counter(data, par);
 	sbam::ReadInfo* read = nullptr, * pair = nullptr;
@@ -394,6 +404,9 @@ void stk::BamReader::summary2(BamFile* bam, NGSData* data, Array<Map<String, sba
 		if (par->detect_sv && status->state == stk::RUNNING) svd->realign();
 	} catch (Exception ex) { SPrint("Error read.", NL, read->toString(), NL, pair->toString()); stk::interruptProc(status, logger, &ex); }
 }
+inline void _runSummary2(stk::BamReader* br, int i, BamFile* bam, NGSData* summary, Array<Map<String, Pointer<sbam::ReadInfo>>>* pairs, stk::SRAnalysis* svd, vchunk range) {
+	br->summary2_(i, bam, summary, pairs, svd, range, true);
+}
 
 void stk::BamReader::summarize(BamFile *bam, NGSData* data) {
 	// Status => Running
@@ -410,18 +423,31 @@ void stk::BamReader::summarize(BamFile *bam, NGSData* data) {
 		// Prepare objects for multi thread proc.
 		Array<BamFile> bams(par->reference.size());
 		sfor(bams) $_.open(bam->path());
+		
+		Array<Map<String, Pointer<sbam::ReadInfo>>> pairs(par->reference.size());
+		
 		Array<SRAnalysis> svds(par->reference.size());
 		sfor(svds) { $_.setParam(par); $_.setData(data); }
 		// 
-		if (par->seqtype == sngs::SEQ_TYPE::SINGLE) {
-			sfori(par->reference) {
-				// Range
-				vchunk chunk(bam->index.loffsets[i][0],
-					(i == par->reference.size() - 1 ? sbam::VOffset(bam->filesize(), 0) : bam->index.loffsets[i + 1][0]));
+		sfori(par->reference) {
+			// Range
+			vchunk chunk(bam->index.loffsets[i][0],
+				(i == par->reference.size() - 1 ? sbam::VOffset(bam->filesize(), 0) : bam->index.loffsets[i + 1][0]));
+			if (par->seqtype == sngs::SEQ_TYPE::SINGLE) 
 				threads->addTask(_runSummary1, this, i, &bams[i], data, &svds[i], chunk);
-			}
+			else if (par->seqtype == sngs::SEQ_TYPE::PAIRED) 
+				threads->addTask(_runSummary2, this, i, &bams[i], data, &pairs, &svds[i], chunk);
 		}
 		threads->complete();
+		if (par->seqtype == sngs::SEQ_TYPE::PAIRED) {
+			// Check reamined unpaired reads
+			
+			sforin(i, 0, par->reference.size()) {
+				SPrint("Unpaired");
+				SPrint("  ", i, ":", pairs[i].size());
+			}
+
+		}
 	}
 	// Single-thread loading BAM
 	else {

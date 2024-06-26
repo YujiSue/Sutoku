@@ -95,9 +95,15 @@ void stk::getDupCpy(Array<SPointer<sbio::Variant>>* primary, Array<SVar*>* candi
 		duprange.begin = $_->pos[1].begin;
 		duprange.end = $_->pos[0].end;
 		// Freq. check
-		freq = (2.f * (float)$_->total()) /
-			(cna->count($_->pos[0].idx, srange(duprange.begin - par->varp.svp.break_site_len, duprange.begin - 1)) +
-				cna->count($_->pos[0].idx, srange(duprange.end + 1, duprange.end + par->varp.svp.break_site_len)));
+		if (duprange.length(true) < par->varp.svp.break_site_len) {
+			freq = (float)$_->total() /
+				cna->count($_->pos[0].idx, srange(duprange.begin, duprange.end));
+		}
+		else {
+			freq = (2.f * (float)$_->total()) /
+				(cna->count($_->pos[0].idx, srange(duprange.begin, duprange.begin  + par->varp.svp.break_site_len)) +
+					cna->count($_->pos[0].idx, srange(duprange.end - par->varp.svp.break_site_len + 1, duprange.end)));
+		}
 		if (freq < par->varp.svp.min_freq) continue;
 		// Background depth
 		if (hasCtrl) {

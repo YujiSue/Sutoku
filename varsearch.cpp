@@ -103,6 +103,11 @@ void stk::VarSearch::copyCheck(NGSData* data) {
 */
 inline bool synVar(Variant *v1, Variant* v2, slib::sbio::SeqList *ref, stk::Param *par) {
 	String s1, s2;
+	// Position
+	if (v1->pos[1].idx == -1 &&
+		std::abs(v1->pos[0].begin - v2->pos[0].begin) <= par->varp.svp.max_gap &&
+		std::abs(v1->pos[0].end - v2->pos[0].end) <= par->varp.svp.max_gap) return true;
+	// Breaksite seq
 	if (v1->type == DELETION) {
 		s1 = ref->at(v1->pos[0].idx).raw(v1->pos[0].begin - par->varp.svp.break_site_len, par->varp.svp.break_site_len) + v1->alt;
 		s2 = ref->at(v2->pos[0].idx).raw(v2->pos[0].begin - par->varp.svp.break_site_len, par->varp.svp.break_site_len) + v2->alt;
