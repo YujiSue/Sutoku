@@ -308,7 +308,7 @@ void stk::BamReader::summary2_(int refidx, BamFile* bam, NGSData* data, Array<Ma
 	catch (Exception ex) { SPrint("Error read.", NL, read->toString(), NL, pair->toString()); stk::interruptProc(status, logger, &ex); }
 }
 
-void stk::BamReader::summary2(BamFile* bam, NGSData* data, Array<Map<String, sbam::ReadInfo>> *pairs, SRAnalysis* svd, vchunk range) {
+void stk::BamReader::summary2(BamFile* bam, NGSData* data, Array<Map<String, SPointer<sbam::ReadInfo>>> *pairs, SRAnalysis* svd, vchunk range) {
 	stk::ReadCounter counter(data, par);
 	sbam::ReadInfo* read = nullptr, * pair = nullptr;
 	AlignExtend extender(&par->seqp);
@@ -350,7 +350,7 @@ void stk::BamReader::summary2(BamFile* bam, NGSData* data, Array<Map<String, sba
 			else {
 				// Search pair
 				pair = pairs->at(read->next.idx).hasKey(read->name) ?
-					&pairs->at(read->next.idx)[read->name] : nullptr;
+					(sbio::sbam::ReadInfo *)pairs->at(read->next.idx)[read->name] : nullptr;
 				// Pairing
 				if (pair) {
 					if (read->ref.dir == pair->ref.dir) {
@@ -396,7 +396,7 @@ void stk::BamReader::summary2(BamFile* bam, NGSData* data, Array<Map<String, sba
 					// Remove from buffer
 					pairs->at(read->next.idx).remove(read->name);
 				}
-				else pairs->at(read->ref.idx).set(read->name, *read);
+				else pairs->at(read->ref.idx).set(read->name, SPointer<sbam::ReadInfo>(*read));
 			}
 			// Update progress
 				status->current_task[0] = current.file_offset - range.begin.file_offset;
@@ -458,7 +458,7 @@ void stk::BamReader::summarize(BamFile *bam, NGSData* data) {
 		if (par->seqtype == sngs::SEQ_TYPE::SINGLE)
 			summary1(0, bam, data, &svd, chunk, false);
 		else if (par->seqtype == sngs::SEQ_TYPE::PAIRED) {
-			Array<Map<String, sbam::ReadInfo>> pairs(par->reference.size());
+			Array<Map<String, SPointer<sbam::ReadInfo>>> pairs(par->reference.size());
 			summary2(bam, data, &pairs, &svd, chunk);
 		}			
 	}

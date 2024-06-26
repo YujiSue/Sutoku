@@ -261,8 +261,6 @@ Response smvs(stk::Analyzer* an) {
 				par.logger.log("Reference mismatch.");
 				continue;
 			}
-
-
 			// Run proc. to make summary
 			par.logger.log("Started to make summary data.");
 			//
