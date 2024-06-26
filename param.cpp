@@ -51,12 +51,7 @@ void stk::Param::set(SDictionary &pref) {
 				}
 				else {
 					auto bams = pref["bam"].split(",");
-					sforeach(in, bams) { 
-						
-						SPrint(in, ":", sfs::exist(in));
-
-						
-						if (sfs::exist(in)) inputs.add(in); }
+					sforeach(in, bams) { if (sfs::exist(in)) inputs.add(in); }
 				}
 			}
 		}
