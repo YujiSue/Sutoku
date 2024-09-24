@@ -118,6 +118,11 @@ inline void addDepth(int r, slib::sbio::NGSData* data1, slib::sbio::NGSData* dat
 	sforin(i, 0, sz) { (*dp1) += (*dp2); ++dp1; ++dp2; }
 }
 void stk::integrate(NGSData* data1, NGSData* data2, stk::Param* par) {
+	/*
+	if (data1->summary.refnum != data2->summary.refnum ||
+		!(data1->summary.reflen == data2->summary.reflen)) 
+		throw RefMismatchException(refMisErrorText(""))
+		*/
 	data1->summary.avelen *= sstat::sum(data1->summary.count);
 	data1->summary.avelen += data2->summary.avelen * sstat::sum(data2->summary.count);
 	data1->summary.total += data2->summary.total;
@@ -173,4 +178,11 @@ void stk::subtract(Array<SVar>* variants1, Array<SVar>* variants2, stk::Param* p
 	}
 	variants1->sort(sorter);
 	variants1->resize(sz);
+}
+
+void stk::annotate(VarList &variants, stk::Param* par) {
+	sforeach(var, variants) {
+		if ((var->flag & NOT_USE_FLAG) || (var->flag & UNAVAILABLE_FLAG)) continue;
+		par->annotdb.annotate(*var, par->reference, par->varp);
+	}
 }

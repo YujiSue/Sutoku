@@ -60,12 +60,14 @@ stk::BamReader::~BamReader() {}
 */
 void stk::BamReader::readinfo(BamFile* bam, IOStream& stream) {
 	sbam::ReadInfo* read;
+	// All
 	if (par->target.empty()) {
 		while (read = bam->next()) { 
 			if (!par->clipped || (par->clipped && read->cigars.clipped(par->min_clip)))
 				stream << read->toString() << NL; stream.flush();
 		}
 	}
+	// Targeted
 	else {
 		sfori(par->target) {
 			auto &trgt = par->target[i];

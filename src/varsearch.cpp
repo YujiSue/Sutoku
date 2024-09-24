@@ -51,52 +51,52 @@ void stk::VarSearch::copyCheck(NGSData* data) {
 	auto cand1 = candidates1.begin();
 	auto cand2 = candidates2.begin();
 	sforin(r, 0, data->summary.refnum) {
-		//threads->addTask(getDelCpy, prim.ptr(), cand1.ptr(), &cna, par);
-		getDelCpy(prim.ptr(), cand1.ptr(), &cna, par);
+		threads->addTask(getDelCpy, prim.ptr(), cand1.ptr(), &cna, par);
+		//getDelCpy(prim.ptr(), cand1.ptr(), &cna, par);
 		++cand1; ++prim;
-		//threads->addTask(getDupCpy, prim.ptr(), cand1.ptr(), &cna, par);
-		getDupCpy(prim.ptr(), cand1.ptr(), &cna, par);
+		threads->addTask(getDupCpy, prim.ptr(), cand1.ptr(), &cna, par);
+		//getDupCpy(prim.ptr(), cand1.ptr(), &cna, par);
 		++cand1; ++prim;
-		//threads->addTask(getInsCpy, prim.ptr(), cand1.ptr(), &cna, par);
-		getInsCpy(prim.ptr(), cand1.ptr(), &cna, par);
+		threads->addTask(getInsCpy, prim.ptr(), cand1.ptr(), &cna, par);
+		//getInsCpy(prim.ptr(), cand1.ptr(), &cna, par);
 		++cand1; ++prim;
-		//threads->addTask(getComplexCpy, prim.ptr(), cand2.ptr(), &cna, par);
-		getComplexCpy(prim.ptr(), cand2.ptr(), &cna, par);
+		threads->addTask(getComplexCpy, prim.ptr(), cand2.ptr(), &cna, par);
+		//getComplexCpy(prim.ptr(), cand2.ptr(), &cna, par);
 		++cand2; ++prim;
-		//threads->addTask(getComplexCpy, prim.ptr(), cand2.ptr(), &cna, par);
-		getComplexCpy(prim.ptr(), cand2.ptr(), &cna, par);
+		threads->addTask(getComplexCpy, prim.ptr(), cand2.ptr(), &cna, par);
+		//getComplexCpy(prim.ptr(), cand2.ptr(), &cna, par);
 		++cand2; ++prim;
-		//threads->addTask(getInvCpy, prim.ptr(), cand2.ptr(), &cna, par);
-		getInvCpy(prim.ptr(), cand2.ptr(), &cna, par);
+		threads->addTask(getInvCpy, prim.ptr(), cand2.ptr(), &cna, par);
+		//getInvCpy(prim.ptr(), cand2.ptr(), &cna, par);
 		++cand2; ++prim;
-		//threads->addTask(getInvInsCpy1, prim.ptr(), cand2.ptr(), &cna, par);
-		getInvInsCpy1(prim.ptr(), cand2.ptr(), &cna, par);
+		threads->addTask(getInvInsCpy1, prim.ptr(), cand2.ptr(), &cna, par);
+		//getInvInsCpy1(prim.ptr(), cand2.ptr(), &cna, par);
 		++cand2; ++prim;
-		//threads->addTask(getInvInsCpy2, prim.ptr(), cand2.ptr(), &cna, par);
-		getInvInsCpy2(prim.ptr(), cand2.ptr(), &cna, par);
+		threads->addTask(getInvInsCpy2, prim.ptr(), cand2.ptr(), &cna, par);
+		//getInvInsCpy2(prim.ptr(), cand2.ptr(), &cna, par);
 		++cand2; ++prim;
 		sforin(s, r + 1, data->summary.refnum) {
-			//threads->addTask(getTrsCpy, prim.ptr(), cand2.ptr(), &cna, par);
-			getTrsCpy(prim.ptr(), cand2.ptr(), &cna, par);
+			threads->addTask(getTrsCpy, prim.ptr(), cand2.ptr(), &cna, par);
+			//getTrsCpy(prim.ptr(), cand2.ptr(), &cna, par);
 			++cand2; ++prim;
-			//threads->addTask(getTrsInsCpy1, prim.ptr(), cand2.ptr(), &cna, par);
-			getTrsInsCpy1(prim.ptr(), cand2.ptr(), &cna, par);
+			threads->addTask(getTrsInsCpy1, prim.ptr(), cand2.ptr(), &cna, par);
+			//getTrsInsCpy1(prim.ptr(), cand2.ptr(), &cna, par);
 			++cand2; ++prim;
-			//threads->addTask(getTrsInsCpy2, prim.ptr(), cand2.ptr(), &cna, par);
-			getTrsInsCpy2(prim.ptr(), cand2.ptr(), &cna, par);
+			threads->addTask(getTrsInsCpy2, prim.ptr(), cand2.ptr(), &cna, par);
+			//getTrsInsCpy2(prim.ptr(), cand2.ptr(), &cna, par);
 			++cand2; ++prim;
-			//threads->addTask(getTrsInvCpy, prim.ptr(), cand2.ptr(), &cna, par);
-			getTrsInvCpy(prim.ptr(), cand2.ptr(), &cna, par);
+			threads->addTask(getTrsInvCpy, prim.ptr(), cand2.ptr(), &cna, par);
+			//getTrsInvCpy(prim.ptr(), cand2.ptr(), &cna, par);
 			++cand2; ++prim;
-			//threads->addTask(getTrsInvInsCpy1, prim.ptr(), cand2.ptr(), &cna, par);
-			getTrsInvInsCpy1(prim.ptr(), cand2.ptr(), &cna, par);
+			threads->addTask(getTrsInvInsCpy1, prim.ptr(), cand2.ptr(), &cna, par);
+			//getTrsInvInsCpy1(prim.ptr(), cand2.ptr(), &cna, par);
 			++cand2; ++prim;
-			//threads->addTask(getTrsInvInsCpy2, prim.ptr(), cand2.ptr(), &cna, par);
-			getTrsInvInsCpy2(prim.ptr(), cand2.ptr(), &cna, par);
+			threads->addTask(getTrsInvInsCpy2, prim.ptr(), cand2.ptr(), &cna, par);
+			//getTrsInvInsCpy2(prim.ptr(), cand2.ptr(), &cna, par);
 			++cand2; ++prim;
 		}
 	}
-	//threads->complete();
+	threads->complete();
 }
 /*
 * Filter conflict variant
@@ -190,16 +190,8 @@ void stk::VarSearch::conflictCheck() {
 		}
 	}
 }
-/*
-* Gene and reported variant annotation
-*/
-void stk::VarSearch::annotate() {
-	sforeach(var, variants) {
-		if ((var->flag & NOT_USE_FLAG) || (var->flag & UNAVAILABLE_FLAG)) continue;
-		par->annotdb.annotate(*var, par->reference, par->varp);
-	}
-}
 
+//
 inline void resizeCandidates(NGSData* data, Array<Array<SVar*>>* candidates1, Array<Array<Pair<SVar*, SVar*>>>* candidates2, stk::Param *par) {
 	int n = (int)par->reference.size(),
 		n2 = smath::combination(n, 2);
@@ -280,7 +272,7 @@ void stk::VarSearch::detect(NGSData* data) {
 		if (par->annotation) {
 			// Log
 			logger->log("Annotation.");
-			annotate();
+			stk::annotate(variants, par);
 			logger->log("Completed.");
 		}
 		//
@@ -295,7 +287,6 @@ void stk::VarSearch::detect(NGSData* data) {
 		status->setState(stk::ERRORED);
 	}
 }
-
 template<class Content>
 inline void clearCandidates(Array<Content>* array) { array->clear(); }
 void stk::VarSearch::reset() {

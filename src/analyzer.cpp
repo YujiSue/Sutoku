@@ -6,6 +6,7 @@ using namespace slib::sbio;
 using namespace slib::sbio::sutil;
 using namespace stk;
 
+
 Analyzer::Analyzer() {}
 Analyzer::Analyzer(SDictionary &pref) : Analyzer() { setParam(pref); }
 Analyzer::~Analyzer() {}
@@ -78,11 +79,11 @@ Response getDepth(stk::Analyzer* an) {
 					sfor(par.target[i]) header.add(par.reference[i].name + ":" + S($_.begin + 1) + "-" + S($_.end + 1));
 				}
 			}
-			f << toString(header, sep) << NL; f.flush();
+			f << toString(header, sep) << LF; f.flush();
 			smath::Vector<svecf> values(header.size());
 			cna.depth(values);
 			Matrix<float> mat;
-			smath::toMat(mat, values);
+			smath::toMat(mat, values, -1.f);
 			f << toString(mat, par.oformat);
 			par.logger.log("Finished.");
 			cna.reset();
@@ -202,6 +203,7 @@ Response summerize(stk::Analyzer* an) {
 	}
 	return res;
 }
+
 Response vsearch(stk::Analyzer* an) {
 	Response res;
 	auto& par = an->par;
@@ -243,12 +245,12 @@ Response vsearch(stk::Analyzer* an) {
 	}
 	return res;
 }
-
 Response smvs(stk::Analyzer* an) {
 	Response res;
 	auto& par = an->par;
 	BamFile bam;
 	NGSData data(&par.reference, par.seqtype, par.depth_bin);
+	String out;
 	BamReader br(an);
 	VarSearch vs(an);
 	par.status.state = stk::INITIALIZE;
@@ -279,13 +281,11 @@ Response smvs(stk::Analyzer* an) {
 			vs.detect(&data);
 			if (par.status.state == stk::FINISHED) {
 				if (par.oformat == "auto") par.oformat = "txt";
-				if (par.output.empty()) {
-					if (par.outdir.empty())
-						par.output = sfs::joinPath(sfs::splitPath($_).first, sfs::fileName($_, false) + ".variants." + par.oformat);
-					else par.output = sfs::joinPath(par.outdir, sfs::fileName($_, false) + ".variants." + par.oformat);
-				}
-				par.logger.log("Save result to '" + par.output + "'.");
-				vs.variants.save(par.output);
+				if (par.outdir.empty())
+					out = sfs::joinPath(sfs::splitPath($_).first, sfs::fileName($_, false) + ".variants." + par.oformat);
+				else out = sfs::joinPath(par.outdir, sfs::fileName($_, false) + ".variants." + par.oformat);
+				par.logger.log("Save result to '" + out + "'.");
+				vs.variants.save(out);
 				par.logger.log("Completed.");
 			}
 			else par.logger.log("Failed.");
@@ -302,19 +302,20 @@ Response integrateSummaries(stk::Analyzer* an) {
 	try {
 		Response res;
 		auto& par = an->par;
-
 		if (par.outdir.empty()) par.outdir = sfs::splitPath(par.inputs[0]).first;
 		String out = sfs::joinPath(par.outdir, "integrated.bsm");
+		// 
 		if (par.inputs.size() == 1) {
 			par.logger.log("Copy summary to '" + out + "'.");
 			sfs::copy(par.inputs[0], out, OVERWRITE);
 			return res;
 		}
-
+		// 
 		NGSData ori, tmp;
 		par.logger.log("Open summary '" + par.inputs[0] + "'.");
 		ori.load(par.inputs[0]);
-		ori.print();		
+		ori.print();
+		//
 		sforin(it, par.inputs.begin()+1, par.inputs.end()) {
 			tmp.reset();
 			par.logger.log("Open summary '" + $_ + "'.");
@@ -323,7 +324,9 @@ Response integrateSummaries(stk::Analyzer* an) {
 			par.logger.log("Integration.");
 			stk::integrate(&ori, &tmp, &par);
 		}
+		par.logger.log("All files have been integrated.");
 		ori.print();
+		par.logger.log("Save result to '" + out + "'.");
 		ori.save(out);
 		return res;
 	}
@@ -358,32 +361,35 @@ Response subtractSV(stk::Analyzer* an) {
 		return Response(ex);
 	}
 }
+// 
 Response mergeVariants(stk::Analyzer* an) {
 	try {
 		Response res;
 		auto& par = an->par;
+		String out;
 		VarFilter filter(&par.reference, &par.annotdb);
 		VarList merge, vl;
+		merge.setReference(&par.reference);
 		sfor(par.inputs) {
-			//par.logger.open(sfs::joinPath(sfs::splitPath($_).first, "log.txt"));
 			par.logger.log("Open variant list '" + $_ + "'.");
 			vl.load($_);
 			par.logger.log("Merge variants.");
 			filter.merge(merge, vl);
 			par.logger.log("Completed.");
+			vl.clearAll();
 		}
+		// Annotation
 		if (par.annotation) {
 			par.logger.log("Annotation started.");
-			filter.annotate(merge);
+			stk::annotate(merge, &par);
 			par.logger.log("Completed.");
 		}
-		if (par.output.empty()) {
-			if (par.outdir.empty())
-				par.output = sfs::joinPath(sfs::splitPath(par.inputs[0]).first, sfs::fileName(par.inputs[0], false) + "_merge." + par.oformat);
-			else par.output = sfs::joinPath(par.outdir, sfs::fileName(par.inputs[0], false) + "_merge." + par.oformat);
-		}
-		par.logger.log("Save merged list to '" + par.output + "'.");
-		merge.save(par.output);
+		//
+		if (par.outdir.empty())
+			out = sfs::joinPath(sfs::splitPath(par.inputs[0]).first, sfs::fileName(par.inputs[0], false) + "_merge." + par.oformat);
+		else out = sfs::joinPath(par.outdir, sfs::fileName(par.inputs[0], false) + "_merge." + par.oformat);
+		par.logger.log("Save merged list to '" + out + "'.");
+		merge.save(out);
 		return res;
 	}
 	catch (Exception ex) {
@@ -391,23 +397,33 @@ Response mergeVariants(stk::Analyzer* an) {
 		return Response(ex);
 	}
 }
+//
 Response uniqueVariants(stk::Analyzer* an) {
 	try {
 		Response res;
 		auto& par = an->par;
 		if (par.oformat == "auto") par.oformat = sfs::extension(par.inputs[0]);
+		String out;
 		VarFilter filter(&par.reference, &par.annotdb);
 		VarList uni;
-		String out;
 		sfor(par.inputs) {
+			par.logger.log("Open variant list '" + $_ + "'.");
 			uni.clearAll();
-			uni.load($_);
-			uni.attribute["_prog_"].add("Sutoku");
-			filter.subtract(uni, par.vcontrol);
-			if (par.annotation) filter.annotate(uni);
-			if (par.outdir.empty()) par.outdir = sfs::splitPath($_).first;
-			out = sfs::joinPath(par.outdir, sfs::fileName($_, false) + "_unique." + par.oformat);
 			uni.setReference(&par.reference);
+			uni.load($_);
+			//
+			filter.subtract(uni, par.vcontrol);
+			// Annotation
+			if (par.annotation) {
+				par.logger.log("Annotation started.");
+				stk::annotate(uni, &par);
+				par.logger.log("Completed.");
+			}
+			//
+			if (par.outdir.empty())
+				out = sfs::joinPath(sfs::splitPath(par.inputs[0]).first, sfs::fileName(par.inputs[0], false) + "_unique." + par.oformat);
+			else out = sfs::joinPath(par.outdir, sfs::fileName(par.inputs[0], false) + "_unique." + par.oformat);
+			par.logger.log("Save unique list to '" + out + "'.");
 			uni.save(out);
 		}
 		return res;
@@ -421,17 +437,27 @@ Response commonVariants(stk::Analyzer* an) {
 	try {
 		Response res;
 		auto& par = an->par;
+		String out;
 		VarFilter filter(&par.reference, &par.annotdb);
 		VarList com, vl;
+		com.setReference(&par.reference);
 		com.load(par.inputs[0]);
 		sforin(vit, par.inputs.begin() + 1, par.inputs.end()) {
+			par.logger.log("Open variant list '" + (*vit) + "'.");
 			vl.load(*vit);
 			filter.common(com, vl);
 		}
-		if (par.annotation) filter.annotate(com);
+		// Annotation
+		if (par.annotation) {
+			par.logger.log("Annotation started.");
+			stk::annotate(com, &par);
+			par.logger.log("Completed.");
+		}
+		//
 		if (par.outdir.empty())
-			par.output = sfs::joinPath(sfs::splitPath(par.inputs[0]).first, sfs::fileName(par.inputs[0], false) + "_common." + par.oformat);
-		else par.output = sfs::joinPath(par.outdir, sfs::fileName(par.inputs[0], false) + "_common." + par.oformat);		com.save(par.output);
+			out = sfs::joinPath(sfs::splitPath(par.inputs[0]).first, sfs::fileName(par.inputs[0], false) + "_common." + par.oformat);
+		else out = sfs::joinPath(par.outdir, sfs::fileName(par.inputs[0], false) + "_common." + par.oformat);
+		com.save(out);
 		return res;
 	}
 	catch (Exception ex) {
@@ -463,6 +489,7 @@ Response Analyzer::analyze() {
 		return Response();
 	}
 }
+
 void Analyzer::setParam(SDictionary &pref) { par.set(pref); }
 void Analyzer::reset() {
 	if (par.threads.isWorking()) par.threads.complete();

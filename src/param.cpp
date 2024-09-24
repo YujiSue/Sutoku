@@ -5,9 +5,12 @@ using namespace slib::sbio;
 using namespace stk;
 
 inline void loadTarget(const char* path, Array<sregion> &regions, SeqList &ref) {
+	// Open
 	slib::sbio::BEDFile target(path);
+	// Ref. name => index
 	target.setRef(ref);
 	target >> regions;
+	// Set zero-based position
 	sfor(target) $_.shift(-1);
 }
 stk::Param::Param() {
@@ -42,13 +45,11 @@ stk::Param::~Param() {}
 void stk::Param::set(SDictionary &pref) {
 	command = pref["_cmd_"];
 	try {
-		//verbose = (bool)pref["verbose"];
 		if (pref["param"]) load(pref["param"]);
 		if (pref["bam"]) {
 			if (command == "readinfo" || command == "summary" || command == "analyze") {
-				if (sfs::isDir(pref["bam"])) {
+				if (sfs::isDir(pref["bam"])) 
 					inputs.append(SDirectory(pref["bam"]).fileList({ "bam" }));
-				}
 				else {
 					auto bams = pref["bam"].split(",");
 					sforeach(in, bams) { if (sfs::exist(in)) inputs.add(in); }
@@ -58,9 +59,8 @@ void stk::Param::set(SDictionary &pref) {
 		if (pref["bsm"]) {
 			if (command == "depth" || command == "copynum" || command == "splitread" || 
 				command == "vsearch" || command == "integrate" || command == "subtract") {
-				if (sfs::isDir(pref["bsm"])) {
+				if (sfs::isDir(pref["bsm"])) 
 					inputs.append(SDirectory(pref["bsm"]).fileList({ "bsm" }));
-				}
 				else {
 					auto bsms = pref["bsm"].split(",");
 					sforeach(in, bsms) { if (sfs::exist(in)) inputs.add(in); }
@@ -69,9 +69,8 @@ void stk::Param::set(SDictionary &pref) {
 		}
 		if (pref["vlist"]) {
 			if (command == "merge" || command == "unique" || command == "common") {
-				if (sfs::isDir(pref["vlist"])) {
+				if (sfs::isDir(pref["vlist"])) 
 					inputs.append(SDirectory(pref["vlist"]).fileList({ "txt", "tsv", "json", "vcf" }));
-				}
 				else {
 					auto vls = pref["vlist"].split(",");
 					sforeach(in, vls) { if (sfs::exist(in)) inputs.add(in); }
@@ -121,7 +120,7 @@ void stk::Param::set(SDictionary &pref) {
 		if (pref["cliplen"]) min_clip = pref["cliplen"];
 		if (pref["realign-param"]) seqp.set(pref["realign-param"]);
 		if (pref["variant-param"]) varp.set(pref["variant-param"]);
-
+		//
 		if (pref["thread"]) max_thread = pref["thread"];
 		threads.setSize(max_thread);
 		//
@@ -137,8 +136,7 @@ void stk::Param::set(SDictionary &pref) {
 	}
 }
 void stk::Param::load(const char* path) { 
-	auto pars = sjson::load(path); 
-
+	auto pars = sjson::load(path);
 	seqtype = pars["paired"] ? sngs::SEQ_TYPE::PAIRED : sngs::SEQ_TYPE::SINGLE;
 	async_load = pars["async-load"] ? true : false;
 	detect_sv = pars["detect-sv"] ? true : false;

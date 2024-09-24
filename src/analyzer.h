@@ -170,7 +170,7 @@ namespace stk {
 		void selectCandidate(NGSData* data);
 		void copyCheck(NGSData* data);
 		void conflictCheck();
-		void annotate();
+		//void annotate();
 	public:
 		VarSearch(Analyzer *a);
 		~VarSearch();
