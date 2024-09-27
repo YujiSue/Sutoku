@@ -310,6 +310,7 @@ void stk::BamReader::summary2_(int refidx, BamFile* bam, NGSData* data, Array<Ma
 	catch (Exception ex) { SPrint("Error read.", NL, read->toString(), NL, pair->toString()); stk::interruptProc(status, logger, &ex); }
 }
 
+
 void stk::BamReader::summary2(BamFile* bam, NGSData* data, Array<Map<String, SPointer<sbam::ReadInfo>>> *pairs, SRAnalysis* svd, vchunk range) {
 	stk::ReadCounter counter(data, par);
 	sbam::ReadInfo* read = nullptr, * pair = nullptr;
