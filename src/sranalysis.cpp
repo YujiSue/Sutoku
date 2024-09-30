@@ -557,15 +557,15 @@ void stk::SRAnalysis::realign() {
 	trie.complete();
 	search.search(par->reference, trie);
 	//
-	auto nref = par->reference.size();
+	auto rnum = par->reference.size();
 	auto var = svars.data();
 	//
 	sforin(q, 0, svars.size()) {
 		candidates.clear();
-		auto aligns = &search.aligns[0][q];
-		sforin(r, 0, nref) {
+		auto aligns = search.aligns[q];
+		sforin(r, 0, rnum) {
 			sfor(*aligns) candidates.add($.ptr());
-			aligns += svars.size();
+			++aligns;
 		}
 		//
 		if (candidates.empty()) {
