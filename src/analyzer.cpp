@@ -6,10 +6,14 @@ using namespace slib::sbio;
 using namespace slib::sbio::sutil;
 using namespace stk;
 
-
+// 
 Analyzer::Analyzer() {}
+// Constructor
 Analyzer::Analyzer(SDictionary &pref) : Analyzer() { setParam(pref); }
+// Constructor
 Analyzer::~Analyzer() {}
+
+// Export parameter template file (JSON)
 Response exportParameterTemplate(stk::Param &par) {
 	try {
 		Response res;
@@ -24,6 +28,8 @@ Response exportParameterTemplate(stk::Param &par) {
 		return Response(ex);
 	}
 }
+
+// Export read infoformation (SAM format)
 Response getReadInfo(stk::Analyzer *an) {
 	try {
 		Response res;
@@ -50,6 +56,7 @@ Response getReadInfo(stk::Analyzer *an) {
 		return Response(ex);
 	}
 }
+//
 Response getDepth(stk::Analyzer* an) {
 	try {
 		Response res;
@@ -139,6 +146,7 @@ Response getCopy(stk::Analyzer* an) {
 	par.logger.log("Completed.");
 	return res;
 }
+// Export split read list (TEXT)
 Response getSRead(stk::Analyzer* an) {
 	try {
 		Response res;
@@ -164,6 +172,7 @@ Response getSRead(stk::Analyzer* an) {
 		return Response(ex);
 	}
 }
+// Detect split/chimeric read and count depth
 Response summerize(stk::Analyzer* an) {
 	Response res;
 	auto& par = an->par;
@@ -466,6 +475,7 @@ Response commonVariants(stk::Analyzer* an) {
 	}
 }
 
+// Hub function
 Response Analyzer::analyze() {
 	if (par.command == "template") return exportParameterTemplate(par);
 	if (par.inputs.empty()) {
@@ -489,8 +499,9 @@ Response Analyzer::analyze() {
 		return Response();
 	}
 }
-
+// Setter
 void Analyzer::setParam(SDictionary &pref) { par.set(pref); }
+// 
 void Analyzer::reset() {
 	if (par.threads.isWorking()) par.threads.complete();
 	par.status.reset();
