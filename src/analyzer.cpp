@@ -181,6 +181,12 @@ Response summerize(stk::Analyzer* an) {
 	BamReader br(an);
 	// Status init.
 	par.status.setState(stk::INITIALIZE);
+	par.logger.log("Initialization");
+	par.logger.log(sstr::rfill("Bin size ...", ' ', 30) + SNumber(par.depth_bin).toString());
+	par.logger.log(sstr::rfill("PCR duplicate ...", ' ', 30) + (par.ignore_dp ? "Ignore" : "Count"));
+	par.logger.log(sstr::rfill("Detect SV ...", ' ', 30) + SNumber(par.detect_sv).toString());
+	par.logger.log(sstr::rfill("Thread count ...", ' ', 30) + SNumber(par.max_thread).toString());
+
 	sfor(par.inputs) {
 		try {
 			// Bam file open
