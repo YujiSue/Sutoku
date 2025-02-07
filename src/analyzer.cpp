@@ -182,10 +182,10 @@ Response summerize(stk::Analyzer* an) {
 	// Status init.
 	par.status.setState(stk::INITIALIZE);
 	par.logger.log("Initialization");
-	par.logger.log(sstr::rfill("Bin size ...", ' ', 30) + SNumber(par.depth_bin).toString());
-	par.logger.log(sstr::rfill("PCR duplicate ...", ' ', 30) + (par.ignore_dp ? "Ignore" : "Count"));
-	par.logger.log(sstr::rfill("Detect SV ...", ' ', 30) + SNumber(par.detect_sv).toString());
-	par.logger.log(sstr::rfill("Thread count ...", ' ', 30) + SNumber(par.max_thread).toString());
+	par.logger.log(sstr::rfill("Bin size ...", ' ', 20) + SNumber(par.depth_bin).toString());
+	par.logger.log(sstr::rfill("PCR duplicate ...", ' ', 20) + (par.ignore_dp ? "Ignore" : "Count"));
+	par.logger.log(sstr::rfill("Detect SV ...", ' ', 20) + SNumber(par.detect_sv).toString());
+	par.logger.log(sstr::rfill("Thread count ...", ' ', 20) + SNumber(par.max_thread).toString());
 
 	sfor(par.inputs) {
 		try {
