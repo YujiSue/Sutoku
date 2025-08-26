@@ -131,6 +131,22 @@
       ],
       "description": "Sequential execution of 'summary' and 'vsearch' commands."
     },
+    "verify": {
+      "require": [
+        "vlist",
+        "reference"
+      ],
+      "option": [
+        "annotdb",
+        "param",
+        "vfilter",
+        "export-filtered",
+        "outdir",
+        "oformat",
+        "log-dir"
+      ],
+      "description": "Select unique variants from variant list(s) by comparing control list."
+    },
     "unique": {
       "require": [
         "vlist",
@@ -140,6 +156,8 @@
       "option": [
         "annotdb",
         "param",
+        "vfilter",
+        "export-filtered",
         "outdir",
         "oformat",
         "log-dir"
@@ -154,6 +172,8 @@
       "option": [
         "annotdb",
         "param",
+        "vfilter",
+        "export-filtered",
         "outdir",
         "oformat",
         "log-dir"
@@ -168,6 +188,8 @@
       "option": [
         "annotdb",
         "param",
+        "vfilter",
+        "export-filtered",
         "outdir",
         "oformat",
         "log-dir"
@@ -269,7 +291,14 @@
       "type": "bool",
       "description": "Option to select reads with clipped region (default: false)."
     },
-
+    "vfilter": {
+      "type": "array",
+      "description": "Option to set external variant filter plugin."
+    },
+    "export-filtered": {
+      "type": "bool",
+      "description": "Option to export filtered data."
+    },
 
     "thread": {
       "brief": "num",

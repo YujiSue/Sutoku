@@ -46,7 +46,7 @@ void stk::showProgress(stk::Status* status) {
 	int prog;
 	while (status->state <= stk::RUNNING) {
 		prog = (int)(status->progress() * 100.0);
-		SWrite(DEL * 4, sstr::lfill(String(prog), ' ', 3), "%");
+		SWrite(slib::BS * 4, sstr::lfill(String(prog), ' ', 3), "%");
 		slib::sutil::sleep(1000);
 	}
 }
@@ -54,7 +54,7 @@ void stk::closeThread(std::thread* thread, stk::Status* status) {
 	if (status->state == stk::RUNNING) status->setState(stk::FINISHED);
 	thread->join();
 	if (status->state != stk::ERRORED) {
-		SPrint(DEL * 4, "100% ... Completed.");
+		SPrint(slib::BS * 4, "100% ... Completed.");
 	}
 }
 void stk::interruptProc(stk::Status* status, SLogger* logger, Exception* ex) {

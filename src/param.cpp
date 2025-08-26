@@ -68,7 +68,7 @@ void stk::Param::set(SDictionary &pref) {
 			}
 		}
 		if (pref["vlist"]) {
-			if (command == "merge" || command == "unique" || command == "common") {
+			if (command == "verify" || command == "merge" || command == "unique" || command == "common") {
 				if (sfs::isDir(pref["vlist"])) 
 					inputs.append(SDirectory(pref["vlist"]).fileList({ "txt", "tsv", "json", "vcf" }));
 				else {
@@ -120,6 +120,25 @@ void stk::Param::set(SDictionary &pref) {
 		if (pref["cliplen"]) min_clip = pref["cliplen"];
 		if (pref["realign-param"]) seqp.set(pref["realign-param"]);
 		if (pref["variant-param"]) varp.set(pref["variant-param"]);
+		if (pref["vfilter"]) {
+			sforeach(vf, pref["vfilter"]) {
+				auto vals = vf.split(":");
+				if (vals.size() < 2) {
+					vfilters.add({
+					D_("plugin", vals[0] + ".plugin"),
+					D_("args", SDictionary())
+						});
+				}
+				else {
+					auto pars = vals[1].parse(";", "=");
+					vfilters.add({
+						D_("plugin", vals[0] + ".plugin"),
+						D_("args", SDictionary(pars))
+						});
+				}
+			}
+		}
+		if (pref["export-filtered"]) export_filtered = true;
 		//
 		if (pref["thread"]) max_thread = pref["thread"];
 		threads.setSize(max_thread);

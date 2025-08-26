@@ -116,7 +116,7 @@ float _count(int bin, svecf* depth, const srange& range) {
 	}
 }
 float stk::CNAnalysis::count(int idx, const srange &range, bool control) {
-	if (!smpl) throw NullException(nullErrorText("NGSData object"));
+	if (!smpl) throw slib::Exception(slib::NULL_ERROR, "Null value error.", slib::String("@") << __func__ << " l. " << 119 << " in '" << "H:\\マイドライブ\\dev\\github\\Sutoku\\src\\cnanalysis.cpp" << "'." << slib::NL << nullErrorText("NGSData object"));
 	if (control && !ctrl) throw NullException(nullErrorText("Control data object"));
 	return _count(smpl->summary.bin, &(control ? ctrl : smpl)->depth[idx], range);
 }

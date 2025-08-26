@@ -61,6 +61,11 @@ namespace stk {
         bool annotation;
         sushort var_site;
 
+        // Plugins for variant filter
+        SArray vfilters;
+        //
+        bool export_filtered;
+
         // Multi thread proc.
         size_t max_thread;
         SWork threads;

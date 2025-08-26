@@ -5,7 +5,8 @@ using namespace slib::sutil;
 using namespace slib::sbio;
 using namespace slib::sbio::sutil;
 using namespace stk;
-
+//
+typedef int vfilter(sbio::VarList &vl, const stk::Param& par, const SDictionary& pref);
 // 
 Analyzer::Analyzer() {}
 // Constructor
@@ -376,6 +377,63 @@ Response subtractSV(stk::Analyzer* an) {
 		return Response(ex);
 	}
 }
+//
+Response verifyVariants(stk::Analyzer* an) {
+	try {
+		Response res;
+		auto& par = an->par;
+		if (par.oformat == "auto") par.oformat = sfs::extension(par.inputs[0]);
+		String out;
+		VarFilter filter(&par.reference, &par.annotdb, &par.varp);
+		sfor(par.inputs) {
+			par.logger.log("Open variant list '" + $_ + "'.");
+			VarList vl;
+			vl.setReference(&par.reference);
+			vl.load($_, &par.reference);
+			// Annotation
+			if (par.annotation) {
+				par.logger.log("Annotation started.");
+				stk::annotate(vl, &par);
+				par.logger.log("Completed.");
+			}
+			//
+			filter.filter(vl);
+			//
+			sforeach(vf, par.vfilters) {
+				//SPrint(vf.toString());
+				par.logger.log(S("Run filter '") << vf["plugin"] << "'.");
+				sapp::SPlugIn<sbio::VarList&, const stk::Param&, const SDictionary&> plugin(vf["plugin"], "vfilter");
+				auto fres = plugin.exec(vl, par, vf["args"]);
+			}
+			if (par.export_filtered) {
+				vl.sort([](const sgenvar& t1, const sgenvar& t2) {
+					if (t1->flag == NOT_USE_FLAG || t1->flag == UNAVAILABLE_FLAG) {
+						if (t2->flag == NOT_USE_FLAG || t2->flag == UNAVAILABLE_FLAG) return (*t1) < (*t2);
+						else return false;
+					}
+					else if (t2->flag == NOT_USE_FLAG || t2->flag == UNAVAILABLE_FLAG) return true;
+					else return (*t1) < (*t2);
+					});
+			}
+			else vl.tidyUp();
+
+			//
+			if (par.outdir.empty())
+				out = sfs::joinPath(sfs::splitPath(par.inputs[0]).first, sfs::fileName(par.inputs[0], false) + "_verified." + par.oformat);
+			else out = sfs::joinPath(par.outdir, sfs::fileName(par.inputs[0], false) + "_verified." + par.oformat);
+			par.logger.log("Save verified list to '" + out + "'.");
+			//
+			vl.save(out, "cols=ID,Chr,Pos,Len,Ref,Alt/Ins,Type,Qual,Freq,Genotype,Cov,Allele Cov,Gene,Site,Mutation,Substitution,Effect,Filter");
+
+		}
+		return res;
+	}
+	catch (Exception ex) {
+		an->par.logger.log(ex);
+		return Response(ex);
+	}
+}
+
 // 
 Response mergeVariants(stk::Analyzer* an) {
 	try {
@@ -419,14 +477,13 @@ Response uniqueVariants(stk::Analyzer* an) {
 		auto& par = an->par;
 		if (par.oformat == "auto") par.oformat = sfs::extension(par.inputs[0]);
 		String out;
-		VarFilter filter(&par.reference, &par.annotdb);
+		VarFilter filter(&par.reference, &par.annotdb, &par.varp);
 		VarList uni;
 		sfor(par.inputs) {
 			par.logger.log("Open variant list '" + $_ + "'.");
 			uni.clearAll();
 			uni.setReference(&par.reference);
-			uni.load($_);
-			//
+			uni.load($_, &par.reference);
 			filter.subtract(uni, par.vcontrol);
 			// Annotation
 			if (par.annotation) {
@@ -435,11 +492,34 @@ Response uniqueVariants(stk::Analyzer* an) {
 				par.logger.log("Completed.");
 			}
 			//
-			if (par.outdir.empty())
+			filter.filter(uni);
+			//
+			sforeach(vf, par.vfilters) {
+				//SPrint(vf.toString());
+				par.logger.log(S("Run filter '") << vf["plugin"] << "'.");
+				sapp::SPlugIn<sbio::VarList&, const stk::Param&, const SDictionary &> plugin(vf["plugin"], "vfilter");
+				auto fres = plugin.exec(uni, par, vf["args"]);
+			}
+			if (par.export_filtered) {
+				uni.sort([](const sgenvar& t1, const sgenvar& t2) {
+					if (t1->flag == NOT_USE_FLAG || t1->flag == UNAVAILABLE_FLAG) {
+						if (t2->flag == NOT_USE_FLAG || t2->flag == UNAVAILABLE_FLAG) return (*t1) < (*t2);
+						else return false;
+					}
+					else if (t2->flag == NOT_USE_FLAG || t2->flag == UNAVAILABLE_FLAG) return true;
+					else return (*t1) < (*t2);
+					});
+			}
+			else uni.tidyUp();
+
+			//
+			if (par.outdir.empty())	
 				out = sfs::joinPath(sfs::splitPath(par.inputs[0]).first, sfs::fileName(par.inputs[0], false) + "_unique." + par.oformat);
 			else out = sfs::joinPath(par.outdir, sfs::fileName(par.inputs[0], false) + "_unique." + par.oformat);
 			par.logger.log("Save unique list to '" + out + "'.");
-			uni.save(out);
+			//
+			uni.save(out, "cols=ID,Chr,Pos,Len,Ref,Alt/Ins,Type,Qual,Freq,Genotype,Cov,Allele Cov,Gene,Site,Mutation,Substitution,Effect,Filter");
+			
 		}
 		return res;
 	}
@@ -448,6 +528,7 @@ Response uniqueVariants(stk::Analyzer* an) {
 		return Response(ex);
 	}
 }
+//
 Response commonVariants(stk::Analyzer* an) {
 	try {
 		Response res;
@@ -497,6 +578,7 @@ Response Analyzer::analyze() {
 	else if (par.command == "analyze") return smvs(this);
 	else if (par.command == "integrate") return integrateSummaries(this);
 	else if (par.command == "subtract") return subtractSV(this);
+	else if (par.command == "verify") return verifyVariants(this);
 	else if (par.command == "merge") return mergeVariants(this);
 	else if (par.command == "unique") return uniqueVariants(this);
 	else if (par.command == "common") return commonVariants(this);
