@@ -246,18 +246,18 @@
       "description": "File path of parameters in JSON format."
     },
     "outdir": {
-      "short": "o",
+      "short": "d",
       "brief": "directory",
       "description": "Directory to export intermediate and/or result file(s)."
     },
     "output": {
-      "short": "O",
-      "brief": "name",
+      "short": "o",
+      "brief": "path",
       "description": "File name for exporting the result(s). If you set multiple inputs, do NOT set this option. Otherwise, the results will be overwritten except for the last data."
     },
     "oformat": {
-      "short": "e",
-      "brief": "extension",
+      "short": "f",
+      "brief": "format",
       "default": "auto",
       "description": "Output format. The default is 'auto' and depends on the main command."
     },
@@ -270,17 +270,24 @@
       "brief": "length",
       "description": "Minimum clip size to analyze. "
     },
-
     "detect-sv": {
       "type": "bool",
-      "description": "Option to analyze split/chimeric reads to detect structure variants (default: false). This flag can also be set in the parameter file."
+      "default": true,
+      "description": "Option to analyze split/chimeric reads to detect structure variants (default: true). This flag can also be set in the parameter file."
+    },
+    "ignore-sv": {
+      "type": "bool",
+      "default": false,
+      "description": "Option to ignore split/chimeric reads (default: false)."
     },
     "paired": {
       "type": "bool",
+      "default": false,
       "description": "Option to analyze as a pired-end sequence (default: false). This flag can also be set in the parameter file."
     },
     "ignore-pcrdp": {
       "type": "bool",
+      "default": false,
       "description": "Option to ignore PCR duplication reads (default: false). This flag can also be set in the parameter file."
     },
     "async-load": {
@@ -299,14 +306,13 @@
       "type": "bool",
       "description": "Option to export filtered data."
     },
-
     "thread": {
       "brief": "num",
       "description": "Maximum thread count."
     },
     "log-dir": {
       "brief": "directory",
-      "description": "Output directory of log file."
+      "description": "Output directory for the log file."
     }
   }
 }

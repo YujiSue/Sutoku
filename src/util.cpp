@@ -41,7 +41,6 @@ void Status::share() {
 #endif
 }
 */
-
 void stk::showProgress(stk::Status* status) {
 	int prog;
 	while (status->state <= stk::RUNNING) {
@@ -101,6 +100,31 @@ void stk::checkVariants(Array<SVar>* variants, stk::Param* par) {
 		if ($_.type == 0) continue;
 		auto current = $, compare = $ + 1;
 		while (compare < variants->end()) {
+
+			/* DEBUG
+			if (8228700 < current->pos[0].end && current->pos[0].end < 8228800) {
+				
+				
+				SPrint((int)current->type, "|", current->pos[0].end, "-", current->pos[1].begin, "|", (current->read[0] + current->read[1]));
+				SPrint((int)current->type, "|", compare->pos[0].end, "-", compare->pos[1].begin, "|", (compare->read[0] + compare->read[1]));
+
+
+				if (current->comparable(*compare)) SPrint("Comparable!");
+
+				if (current->lt(*compare, &par->varp.svp)) {
+					SPrint("Less than");
+					break;
+				}
+
+				if (current->equal(*compare, &par->reference, &par->varp.svp)) {
+					current->merge(*compare, &par->varp.svp); --sz;
+					if (current->type == 0) current = compare;
+				}
+
+
+			}
+			*/
+
 			if (!current->comparable(*compare) || current->lt(*compare, &par->varp.svp)) break;
 			if (current->equal(*compare, &par->reference, &par->varp.svp)) {
 				current->merge(*compare, &par->varp.svp); --sz;

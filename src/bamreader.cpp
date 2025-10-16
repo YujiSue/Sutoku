@@ -1,6 +1,81 @@
 #include "analyzer.h"
 #include "smath/stat.h"
+
+
+int debug = 844;
+
+//
 using namespace slib::smath;
+
+/**
+* Extend alignment before re-alignment.
+*/
+void _extendRead(sbam::ReadInfo* read, Sequence* ref, AlignExtend* extender) {
+	// Clear clip flag
+	/* Head clip */
+	if (read->cigars[0].option == scigar::SCLIP) {
+		read->query.begin += read->cigars[0].length;
+		read->cigars.remove(0, 1);
+	}
+	/* Tail clip */
+	if (read->cigars[-1].option == scigar::SCLIP) {
+		read->query.end -= read->cigars[-1].length;
+		read->cigars.resize(read->cigars.size() - 1);
+	}
+	// Clear complement flag
+	bool rev = read->ref.dir;
+	read->ref.dir = false;
+
+	// Extend
+	extender->extend(ref, &read->seq, read);
+
+
+	/* DEBUG
+	SPrint(read->toString());
+
+	read->ref.idx = 3;
+	read->cigars = "118M1I16M1I33M";
+	read->ref.begin = 8228820;
+	read->ref.end = read->ref.begin + read->cigars.refSize() - 1;
+	read->query.begin = 16;
+	auto s = "CTATGGAGAACCCAATAATAATCTTTATTGAGAACAACTGTTCGTCGGAAGAACGCCGAACACGCGGCACACGCGTCCACTCCGAAATGAATACCCGTCGAATCTGTACCACAAATGGCGCAAGCAGGAACCTGAAATTGAAAAAAAAAGATTTTTTAAAAAAATTTGGAGAAACTTTTATTTTG";
+	read->query.end = strlen(s) - 1;
+	read->seq.resize(strlen(s));
+	sdna::encode((const subyte*)s, 0, read->seq.size(), (subyte*)&read->seq[0]);
+
+	SPrint(read->toString());
+
+	extender->extend(ref, &read->seq, read);
+	ref->raw(read->ref.begin, read->ref.length(true));
+	String rseq = ref->raw(read->ref);
+	String qseq = read->raw().substring(read->query.begin, read->query.length(true));
+
+	SPrint(read->alref(rseq));
+	SPrint(read->match());
+	SPrint(read->alque(qseq));
+
+	if (read->query.begin) read->cigars.add(Cigar(scigar::SCLIP, read->query.begin), DIRECTION::HEAD);
+	if (read->query.end < read->seq.size() - 1) read->cigars.add(Cigar(scigar::SCLIP, (int)read->seq.size() - read->query.end - 1));
+
+	SPrint(read->cigars.toString());
+*/
+
+	// Check result
+	/* Reassign head clip */
+	if (read->query.begin) 
+		read->cigars.add(Cigar(scigar::SCLIP, read->query.begin), DIRECTION::HEAD);
+	/* Reassign tail clip */
+	if (read->query.end < read->seq.size() - 1) 
+		read->cigars.add(Cigar(scigar::SCLIP, (int)read->seq.size() - read->query.end - 1));
+	/* Reassign read direction */
+	read->ref.dir = rev;
+	/* Reassing query range */
+	read->query = srange(0, (int)read->seq.size() - 1);
+
+	// 
+	extender->reset();
+}
+
 //
 stk::ReadCounter::ReadCounter() : bin(1), depths(nullptr) {}
 stk::ReadCounter::ReadCounter(NGSData* data, Param* par) : ReadCounter() { set(data, par); }
@@ -8,41 +83,131 @@ stk::ReadCounter::~ReadCounter() {}
 void stk::ReadCounter::set(NGSData* data, Param* par) {
 	bin = data->summary.bin; depths = &data->depth;
 }
+/**
+* Count depth
+*/
 void stk::ReadCounter::count(sbpos* pos, CigarArray* cigars) {
+	// Ref pos
 	auto rpos = pos->begin;
+	// Pointer to depth
 	float* depth = depths->at(pos->idx).data(), * dp;
+	// Bin pos
 	int beg, end;
+	// Check cigar data
 	if (cigars) {
+		// Proc. each cigar
 		sfor(*cigars) {
+			/* Set binned pos. */
 			beg = rpos / bin, end = (rpos + $_.length - 1) / bin;
+			/* Set current depth data pointer */
 			dp = depth + beg;
+			/* Match or mismatch (= Ref. length is same as que. length) */
 			if ($_.option == scigar::MATCH || $_.option == scigar::PMATCH || $_.option == scigar::MMATCH) {
-				if (beg == end) { *dp += (float)$_.length / bin; }
-				else {
-					*dp += (float)(bin - (rpos % bin)) / bin; ++beg; ++dp;
-					while (beg < end) {
-						*dp += 1.f; ++beg; ++dp;
+				/** Count @ single pos. **/
+				if (beg == end) { 
+
+					/* DEBUG
+
+					if (beg == debug) {
+
+						std::cout << "debug" << std::endl;
+						std::cout << (*dp) << std::endl;
+						std::cout << pos->begin << "-" << pos->end << std::endl;
+						std::cout << cigars->toString() << std::endl;
+
 					}
-					*dp += (float)((rpos + $_.length) - (end * bin)) / bin;
+					*/
+					
+					(*dp) += (float)$_.length / bin; 
 				}
+				/** Count @ multiple pos. **/
+				else {
+
+					/* DEBUG
+
+					if (beg == debug) {
+
+						std::cout << "debug" << std::endl;
+						std::cout << (*dp) << std::endl;
+						std::cout << pos->begin << "-" << pos->end << std::endl;
+						std::cout << cigars->toString() << std::endl;
+
+					}
+					*/
+					/** 1st pos. **/
+					(*dp) += (float)(bin - (rpos % bin)) / bin; ++beg; ++dp;
+					/** 2nd to {N-1}th pos. **/
+					while (beg < end) {
+
+
+						/* DEBUG
+
+						if (beg == debug) {
+
+							std::cout << "debug" << std::endl;
+							std::cout << (*dp) << std::endl;
+							std::cout << pos->begin << "-" << pos->end << std::endl;
+							std::cout << cigars->toString() << std::endl;
+
+						}
+						*/
+
+						(*dp) += 1.f; ++beg; ++dp;
+					}
+
+					/* DEBUG
+					if (beg == debug) {
+
+						std::cout << "debug" << std::endl;
+						std::cout << (*dp) << std::endl;
+						std::cout << pos->begin << "-" << pos->end << std::endl;
+						std::cout << cigars->toString() << std::endl;
+
+					}
+
+					auto remain = (float)((rpos + $_.length) - (end * bin)) / bin;
+					if (remain > 1.f) {
+
+						std::cout << "remain err." << std::endl;
+						std::cout << remain << std::endl;
+
+
+					}
+					*/
+					/** Last pos. **/
+					(*dp) += (float)((rpos + $_.length) - (end * bin)) / bin;
+				}
+				/** Proceed **/
 				rpos += $_.length;
 			}
-			else if ($_.option == scigar::DELETION || $_.option == scigar::SKIP) rpos += $_.length;
+			/* Del. or skip (= Only ref. proceed) */
+			else if ($_.option == scigar::DELETION || $_.option == scigar::SKIP) { rpos += $_.length; }
 		}
 	}
+	// Total length match
 	else {
+		/* Set binned pos. */
 		beg = rpos / bin, end = pos->end / bin;
+		/* Set current depth data pointer */
 		dp = depth + beg;
-		if (beg == end) { *dp += (float)pos->length(true) / bin; }
+		/** Count @ single pos. **/
+		if (beg == end) { (*dp) += (float)pos->length(true) / bin; }
+		/** Count @ multiple pos. **/
 		else {
-			*dp += (float)(bin - (rpos % bin)) / bin; ++beg; ++dp;
+			/** 1st pos. **/
+			(*dp) += (float)(bin - (rpos % bin)) / bin; ++beg; ++dp;
+			/** 2nd to {N-1}th pos. **/
 			while (beg < end) {
-				*dp += 1.f; ++beg; ++dp;
+				(*dp) += 1.f; ++beg; ++dp;
 			}
-			*dp += (float)((rpos + pos->length(true)) - (end * bin)) / bin;
+			/** Last pos. **/
+			(*dp) += (float)((rpos + pos->length(true)) - (end * bin)) / bin;
 		}
 	}
 }
+/**
+* Count depth of read info.
+*/
 void stk::ReadCounter::count(sbam::ReadInfo* read) { count(&read->ref, &read->cigars); }
 
 /**
@@ -59,10 +224,12 @@ stk::BamReader::~BamReader() {}
 * Get read info as SAM format (brief check). For details, use samtools and other softwares.
 */
 void stk::BamReader::readinfo(BamFile* bam, IOStream& stream) {
+	// Init.
 	sbam::ReadInfo* read;
-	// All
+	// Non-targeted
 	if (par->target.empty()) {
-		while (read = bam->next()) { 
+		/* Export read info */
+		while (read = bam->next()) {
 			if (!par->clipped || (par->clipped && read->cigars.clipped(par->min_clip)))
 				stream << read->toString() << NL; stream.flush();
 		}
@@ -70,16 +237,23 @@ void stk::BamReader::readinfo(BamFile* bam, IOStream& stream) {
 	// Targeted
 	else {
 		sfori(par->target) {
-			auto &trgt = par->target[i];
-			auto bins = sbam::getBins(trgt);
+			/* Get bins of target region */
+			auto bins = sbam::getBins(par->target[i]);
+			
+			/* Virtual offset(s) to cover the target region */
 			vchunks chunks;
 			sforeach(bin, bins) {
 				chunks.append(bam->index.chunks[i][bam->index.bin_map[i][bin]]);
 			}
 			chunks.unique();
+
+			/* Export resds in target region */
 			sforeach(chunk, chunks) {
+				/** Reset offset **/
 				auto current = chunk.begin;
 				bam->setVOffset(current);
+				
+				/** Writeout read info. **/
 				while (current < chunk.end && (read = bam->next())) { 
 					if (par->target[i].overlap(read->ref)) {
 						if (!par->clipped || (par->clipped && read->cigars.clipped(par->min_clip))) {
@@ -91,84 +265,96 @@ void stk::BamReader::readinfo(BamFile* bam, IOStream& stream) {
 			}
 		}
 	}
-	logger->log("Finished.");
 }
 /**
-* Extend alignment before re-alignment.
+* Single read summary
 */
-void _extendRead(sbam::ReadInfo* read, Sequence* ref, AlignExtend* extender) {
-	if (read->cigars[0].option == scigar::SCLIP) {
-		read->query.begin += read->cigars[0].length;
-		read->cigars.remove(0, 1);
-	}
-	if (read->cigars[-1].option == scigar::SCLIP) {
-		read->query.end -= read->cigars[-1].length;
-		read->cigars.resize(read->cigars.size() - 1);
-	}
-	bool rev = read->ref.dir;
-	read->ref.dir = false;
-	extender->extend(ref, &read->seq, read);
-	if (read->query.begin) read->cigars.add(Cigar(scigar::SCLIP, read->query.begin), DIRECTION::HEAD);
-	if (read->query.end < read->seq.size() - 1) read->cigars.add(Cigar(scigar::SCLIP, (int)read->seq.size() - read->query.end - 1));
-	read->ref.dir = rev;
-	read->query = srange(0, (int)read->seq.size() - 1);
-	extender->reset();
-}
-// Single read summary
 void stk::BamReader::summary1(int refidx, BamFile* bam, NGSData* data, SRAnalysis* svd, vchunk range, bool async) {
+	// Init.
 	stk::ReadCounter counter(data, par);
 	sbam::ReadInfo* read = nullptr;
 	AlignExtend extender(&par->seqp);
-	//
 	auto current = range.begin;
 	try {
-		// Move to offset
+		/* Move to offset */
 		bam->setVOffset(current);
-		// Loop
-		while ((current = bam->voffset()) < range.end &&
+		/* Loop */
+		while ((current = bam->voffset()) < range.end && 
 			(read = bam->next()) &&
 			status->state == stk::RUNNING) {
-			// Ignore secondary alignment
+
+			/** Ignore secondary alignment **/
 			if (read->flag & sbam::SECONDARY_ALIGN_READ || read->flag & sbam::SUPPLEMENTAL) continue;
-			// Increment total read count
+
+			/** Increment total read count **/
 			if (async) {
 				SAutoLock al(par->slock);
 				++(data->summary.total);
 			}
 			else ++(data->summary.total);
-			// Discard unmapped read
+
+			/** Discard unmapped read **/
 			if (read->flag & sbam::UNMAPPED_READ) continue;
-			// PCR duplication check
+
+			/** PCR duplication check **/
 			if (par->ignore_dp && (read->flag & sbam::PCR_DUPLICATE)) continue;
-			// Update read count and total length
+
+			/** Update read count and total length **/
 			++(data->summary.count[refidx]);
 			data->summary.bases[refidx] += read->seq.size();
-			// Extend
+
+			/** Extend **/
 			_extendRead(read, &par->reference[read->ref.idx], &extender);
-			// Check read with clipped region
+
+			
+			
+			/* DEBUG
+			if (read->name == "LOKDQ:02922:11537") {
+
+				std::cout << "debug" << std::endl;
+				if (stk::headClip(&read->cigars, par->min_clip)) std::cout << "Head clip!" << std::endl;
+
+
+			}
+			*/
+
+			/** Check clip size **/
 			if (stk::headClip(&read->cigars, par->min_clip)) {
-				//extender.extendHead...
 				if (par->detect_sv) svd->addClipRead(read, DIRECTION::HEAD);
 			}
 			else if (stk::tailClip(&read->cigars, par->min_clip)) {
-				//extender.extendTail...
 				if (par->detect_sv) svd->addClipRead(read, DIRECTION::TAIL);
 			}
-			// Depth count
+			
+			/** Depth count **/
 			counter.count(read);
-			// Progress indicate
+
+
+			/* DEBUG
+			if (data->depth[0][debug] >= 11.f) {
+
+				std::cout << read->toString() << std::endl;
+
+			}
+			*/
+
+			/** Update progress **/
 			status->current_task[async?refidx:0] = current.file_offset - range.begin.file_offset;
 		}
-		// Re-align leftovers
+		/* Re-align leftovers */
 		if (par->detect_sv && status->state == stk::RUNNING) svd->realign();
 	}
 	catch (Exception ex) { 
 		stk::interruptProc(status, logger, &ex); 
 	}
 }
+/**
+* For multi process
+*/
 inline void _runSummary1(stk::BamReader* br, int i, BamFile* bam, NGSData* summary, stk::SRAnalysis* svd, vchunk range) {
 	br->summary1(i, bam, summary, svd, range, true);
 }
+
 // Correct sequenced site of paired reads
 void _correctOverlap(sbam::ReadInfo* read, sbam::ReadInfo* pair) {
 	if (read->ref.idx != pair->ref.idx) return;
@@ -184,10 +370,13 @@ void _correctOverlap(sbam::ReadInfo* read, sbam::ReadInfo* pair) {
 	// Use only one side read
 	if (r2->ref.begin <= r1->ref.begin) { r1->cigars.clear(); return; }
 	else if (r2->ref.end <= r1->ref.end) { r2->cigars.clear(); return; }
+	
 	// Check whether pairs has insertion 
 	bool midclip = r1->cigars[-1].option == scigar::SCLIP && r2->cigars[0].option == scigar::SCLIP;
+	
 	// Trimming overlap
 	sbio::sutil::trimOver(r1->ref, r1->query, r1->cigars, r2->ref, r2->query, r2->cigars, false);
+	
 	if (midclip && r1->cigars.size() && r1->query.end < r1->seq.size() - 1) {
 		r1->cigars.add(Cigar(scigar::SCLIP, (int)r1->seq.size() - r1->query.end - 1));
 	}
@@ -197,7 +386,10 @@ void _correctOverlap(sbam::ReadInfo* read, sbam::ReadInfo* pair) {
 		if (r2->cigars[0].option != scigar::SCLIP) r2->cigars.add(Cigar(scigar::SCLIP, 0), DIRECTION::HEAD);
 	}
 }
-// Paired end summary 
+
+/**
+* Paired-end summary
+*/ 
 void stk::BamReader::summary2_(int refidx, BamFile* bam, NGSData* data, Array<Map<String, slib::Pointer<sbam::ReadInfo>>>* pairs, SRAnalysis* svd, vchunk range, bool async) {
 	stk::ReadCounter counter(data, par);
 	sbam::ReadInfo* read = nullptr, * pair = nullptr;
@@ -407,21 +599,31 @@ void stk::BamReader::summary2(BamFile* bam, NGSData* data, Array<Map<String, SPo
 		if (par->detect_sv && status->state == stk::RUNNING) svd->realign();
 	} catch (Exception ex) { SPrint("Error read.", NL, read->toString(), NL, pair->toString()); stk::interruptProc(status, logger, &ex); }
 }
+
+/**
+* For multi process
+*/
 inline void _runSummary2(stk::BamReader* br, int i, BamFile* bam, NGSData* summary, Array<Map<String, Pointer<sbam::ReadInfo>>>* pairs, stk::SRAnalysis* svd, vchunk range) {
 	br->summary2_(i, bam, summary, pairs, svd, range, true);
 }
 
+/**
+* Make summary
+*/
 void stk::BamReader::summarize(BamFile *bam, NGSData* data) {
-	// Status => Running
+	// Status init.
 	status->setState(stk::RUNNING);
 	status->setTask(bam->filesize(), par->reference.size());
-	// Log >> check all reads
+
+	// Log
 	logger->log("Started to check aligned reads.");
+
 	// Display progress
 	SWrite(SP * 4, "> Progress: ", SP * 4);
 	std::thread thread(stk::showProgress, status);
+
 	// Read analysis
-	// Multi-thread loading BAM
+	// Multi-thread BAM loading
 	if (par->async_load && bam->hasIndex()) {
 		// Prepare objects for multi thread proc.
 		Array<BamFile> bams(par->reference.size());
@@ -454,22 +656,34 @@ void stk::BamReader::summarize(BamFile *bam, NGSData* data) {
 	}
 	// Single-thread loading BAM
 	else {
+		/* Analyzer setup */
 		SRAnalysis svd(data, par);
-		//
-		// Run
+		/* Set range */
 		vchunk chunk(bam->voffset(), sbam::VOffset(bam->filesize(), 0));
+		/* Single read */
 		if (par->seqtype == sngs::SEQ_TYPE::SINGLE)
 			summary1(0, bam, data, &svd, chunk, false);
+		/* Paired-end read */
 		else if (par->seqtype == sngs::SEQ_TYPE::PAIRED) {
 			Array<Map<String, SPointer<sbam::ReadInfo>>> pairs(par->reference.size());
 			summary2(bam, data, &pairs, &svd, chunk);
 		}			
 	}
+
+	// Close progress thread
 	stk::closeThread(&thread, status);
+
+	// Totalize
 	totalize(data);
 }
-// 
+
+/**
+* Totalize
+*/
 void stk::BamReader::totalize(NGSData* data) {
+
+
+	// Count total read
 	size_t total = 0;
 	sfor(data->variants) total += $_.size();
 	status->setState(stk::RUNNING);
@@ -503,6 +717,8 @@ void stk::BamReader::totalize(NGSData* data) {
 		threads->complete();
 		data->summary.cover = 1.0 - ((double)sstat::sum(uncov) / tlen);
 	}
-	catch (Exception ex) { par->logger.log(ex); }
+	catch (Exception ex) { 
+		par->logger.log(ex); 
+	}
 	status->setState(stk::FINISHED);
 }

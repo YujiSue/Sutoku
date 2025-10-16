@@ -1,5 +1,22 @@
 #include "analyzer.h"
 
+/**
+* Check SV
+*/ 
+bool _checkSV(slib::sbio::SVar& var, stk::Param* par) {
+	auto& vp = par->varp.svp;
+	// Check target region
+	if (par->target.size()) {
+		if (!par->target[var.pos[0].idx].overlap(var.pos[0]) &&
+			!par->target[var.pos[1].idx].overlap(var.pos[1])) return false;
+	}
+	// Verify
+	return vp.min_read <= var.total() && // Reac count
+		vp.min_qual <= slib::sbio::sutil::phredVal(var.qual) && // Read qual.
+		var.bias() <= vp.read_bias; // Read bias
+}
+
+
 stk::SRAnalysis::SRAnalysis(Analyzer* an) : par(nullptr), status(nullptr), summary(nullptr), threads(nullptr), logger(nullptr) {
 	if (an) {
 		par = &an->par;
@@ -11,54 +28,52 @@ stk::SRAnalysis::SRAnalysis(Analyzer* an) : par(nullptr), status(nullptr), summa
 stk::SRAnalysis::SRAnalysis(NGSData* d, stk::Param* p) : SRAnalysis() { setData(d); setParam(p); }
 stk::SRAnalysis::~SRAnalysis() {}
 void stk::SRAnalysis::setReader(stk::BamReader* br) {
-	//
 	par = br->par; 
 	status = br->status;
 	threads = br->threads;
 	logger = br->logger;
-	//
 	trie.setParam(&par->seqp); 
 	search.setParam(&par->seqp);
 	if (par->async_load) search.setThreads(nullptr);
 	else search.setThreads(threads);
 }
-bool checkSV(slib::sbio::SVar& var, stk::Param* par) {
-	auto& vp = par->varp.svp;
-	if (par->target.size()) {
-		if (!par->target[var.pos[0].idx].overlap(var.pos[0]) && 
-			!par->target[var.pos[1].idx].overlap(var.pos[1])) return false;
-	}
-	return vp.min_read <= var.total() &&
-		vp.min_qual <= slib::sbio::sutil::phredVal(var.qual) && 
-		var.bias() <= vp.read_bias;
-}
+/**
+* Export split/chimeric reads
+*/
 void stk::SRAnalysis::splitreads(slib::sbio::NGSData* data, slib::IOStream& stream) {
+	// Writeout header
 	stream.print("Read type\tAligned1\tAligned2\tUnaligned seq \tRead count (Fwd/Rev)\tQuality");
+
+	// Check background
 	if (par->control.isLoaded()) 
 		sfor2(data->variants, par->control.variants) stk::subtract(&$_1, &$_2, par);
+
+	// 
 	auto it = data->variants.begin();
 	sforin(i, 0, data->summary.refnum) {
-		// DEL
-		if (par->detect[0]) { sforeach(var, $_) { if (checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
+		/* DEL */
+		if (par->detect[0]) { sforeach(var, $_) { if (_checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
 		$NEXT;
-		// DUP
-		if (par->detect[1]) { sforeach(var, $_) { if (checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
+		/* DUP */
+		if (par->detect[1]) { sforeach(var, $_) { if (_checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
 		$NEXT;
-		// INS
-		if (par->detect[2]) { sforeach(var, $_) { if (checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
+		/* INS */
+		if (par->detect[2]) { sforeach(var, $_) { if (_checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
 		$NEXT;
-		// INV
-		if (par->detect[4]) { sforeach(var, $_) { if (checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
+		/* INV */
+		if (par->detect[4]) { sforeach(var, $_) { if (_checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
 		$NEXT;
-		// TRS
-		if (par->detect[6]) { sforeach(var, $_) { if (checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
+		/* TRS */
+		if (par->detect[6]) { sforeach(var, $_) { if (_checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
 		$NEXT;
-		// TRS+INV
-		if (par->detect[8]) { sforeach(var, $_) { if (checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
+		/* TRS+INV */
+		if (par->detect[8]) { sforeach(var, $_) { if (_checkSV(var, par)) { stream.print(var.toString(&par->reference)); } } }
 		$NEXT;
 	}
 }
-
+/**
+* 
+*/
 AlignPair* _selectPair(Array<salign*>* candidates, SVar* var) {
 	//
 	candidates->sort([](salign* a1, salign* a2) { return a2->score < a1->score; });
@@ -67,6 +82,17 @@ AlignPair* _selectPair(Array<salign*>* candidates, SVar* var) {
 	salign* best = candidates->at(0);
 	auto clip = var->pos[0].idx == -1 ? DIRECTION::HEAD : DIRECTION::TAIL;
 	auto pos = var->pos[0].idx == -1 ? &var->pos[1] : &var->pos[0];
+	
+	/* DEBUG
+	if (candidates->size() > 1 && candidates->at(1)->score == max_score) {
+		SPrint((clip == DIRECTION::HEAD ? "*** | " : ""), pos->idx, ":", pos->begin, "-", pos->end, (clip == DIRECTION::TAIL ? " | ***" : ""));
+		sforeach(al, *candidates) {
+			SPrint(al->ref.idx, ":", al->ref.begin, "-", al->ref.end, ":", al->score);
+		}
+	}
+	*/
+	
+	
 	//
 	sfor(*candidates) {
 		total_score += $_->score;
@@ -105,6 +131,15 @@ AlignPair* _selectPair(Array<salign*>* candidates, SVar* var) {
 		else if ($_->ref.idx == pos->idx) best = $_;
 	}
 	best->score = 1.f - (best->score / total_score);
+
+
+	/* DEBUG
+	if (candidates->size() > 1 && candidates->at(1)->score == max_score) {
+		SPrint("[*] ", best->ref.idx, ":", best->ref.begin, "-", best->ref.end, ":", best->score);
+	}
+	*/
+
+
 	return best;
 }
 
@@ -234,9 +269,12 @@ void _makeVariant1(AlignPair *al, SVar* var, ubytearray *que, NGSData *data, stk
 		var->pos[1] = al->ref;
 	}
 	// 
-	if (al->ref.dir) sna::toComplement(var->alt);
+	
+	//if (0 < var->read[1]) sna::toComplement(var->alt);
+	
 	// Adjust quality value
 	var->qual = 1.0 - ((1.0 - al->score) * (1.0 - var->qual));
+	if (var->qual > 1.0 - par->min_err_prob) var->qual = 1.0 - par->min_err_prob;
 	if (var->qual < par->min_err_prob) var->qual = par->min_err_prob;
 	// Decide variant type
 	var->categorize();
@@ -398,7 +436,9 @@ void _makeVariant2(Pair<AlignPair*, AlignPair*> &als, SVar* var, NGSData *data, 
 	if (als.first && als.first->cigars.empty()) als.first = nullptr;
 	if (als.second && als.second->cigars.empty()) als.second = nullptr;
 }
-
+/**
+* Single read clip
+*/
 void stk::SRAnalysis::addClipRead(sbam::ReadInfo* read, DIRECTION clip) {
 	auto sv = &svars.next();
 	if (clip == DIRECTION::HEAD) {
@@ -411,9 +451,13 @@ void stk::SRAnalysis::addClipRead(sbam::ReadInfo* read, DIRECTION clip) {
 	}
 	sv->read[read->ref.dir ? 1 : 0] = 1;
 	sv->qual = sbio::sutil::rawVal(read->mapq);
+	if (sv->qual > 1.0 - par->min_err_prob) sv->qual = 1.0 - par->min_err_prob;
 	if (sv->qual < par->min_err_prob) sv->qual = par->min_err_prob;
 	if (par->clip_buffer <= svars.size()) realign();
 }
+/**
+* Paired-end read clip
+*/
 void stk::SRAnalysis::addClipReadPair(sbam::ReadInfo* read, sbam::ReadInfo* pair, bool inv) {
 	SVar* sv = nullptr;
 	_buffer.clear();
@@ -550,12 +594,15 @@ void stk::SRAnalysis::addClipReadPair(sbam::ReadInfo* read, sbam::ReadInfo* pair
 	if (par->clip_buffer <= svars.size()) realign();
 }
 void stk::SRAnalysis::realign() {
+	// Check candidates
 	if (svars.empty()) return;
+	// Init.
 	stk::ReadCounter counter(summary, par);
 	Array<AlignPair*> candidates;
-	//
+	// Local search
 	trie.complete();
 	search.search(par->reference, trie);
+
 	//
 	auto rnum = par->reference.size();
 	auto var = svars.data();
@@ -578,14 +625,40 @@ void stk::SRAnalysis::realign() {
 					summary->addVariant(*var);
 				}
 			}
+			//
 		}
 		else {
 			// Single
 			if (var->pos[0].idx == -1 || var->pos[1].idx == -1) {
 				auto best = _selectPair(&candidates, var);
 				if (best) {
+
+					/* DEBUG 
+					SPrint(best->ref.idx, ":", best->ref.begin, "-", best->ref.end);
+					SPrint(best->query.begin, "-", best->query.end, "/", trie.queries[2 * q].size());
+					SPrint(best->cigars.toString());
+
+					String rseq = par->reference.raw(best->ref);
+					String qseq;
+					qseq.resize(trie.queries[2 * q].size());
+					sbio::sdna::decode(&trie.queries[2 * q][0], best->query.begin, best->query.length(true), (subyte*)&qseq[0]);
+					
+
+					SPrint(best->alref(rseq));
+					SPrint(best->match());
+					SPrint(best->alque(qseq));
+					
+					SWrite(var->qual);
+					*/
+
 					_makeVariant1(best, var, &trie.queries[2 * q], summary, par);
+
+					/* DEBUG
+					SPrint(">>", var->qual);
+					*/
+
 					if (par->async_load) par->slock.lock();
+					if (best->ref.dir) best->cigars.reverse();
 					counter.count(&best->ref, &best->cigars);
 					if (par->async_load) par->slock.unlock();
 				}
@@ -610,7 +683,7 @@ void stk::SRAnalysis::setParam(Param* p) {
 	trie.setParam(&par->seqp);
 	trie.reserve(par->clip_buffer * 2 + 1);
 	search.setParam(&par->seqp);
-
+	// Multi thread search
 	if (!par->async_load) search.setThreads(&par->threads);
 }
 void stk::SRAnalysis::reset() {

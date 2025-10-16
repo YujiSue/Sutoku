@@ -9,12 +9,16 @@ using namespace slib;
 using namespace slib::sbio;
 using namespace slib::smath;
 using namespace slib::sapp;
+
 namespace stk {
 	constexpr subyte INITIALIZE = 0x01;
 	constexpr subyte RUNNING = 0x02;
 	constexpr subyte ERRORED = 0x03;
 	constexpr subyte FINISHED = 0x04;
+
+	// Definition
 	class Param;
+	// Definition
 	class Status {
 	private:
 		SLock _lock;

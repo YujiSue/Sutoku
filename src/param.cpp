@@ -7,15 +7,18 @@ using namespace stk;
 inline void loadTarget(const char* path, Array<sregion> &regions, SeqList &ref) {
 	// Open
 	slib::sbio::BEDFile target(path);
-	// Ref. name => index
+
+	// Load region
 	target.setRef(ref);
 	target >> regions;
+	
 	// Set zero-based position
 	sfor(target) $_.shift(-1);
 }
+
 stk::Param::Param() {
 	async_load = false;
-	detect_sv = false;
+	detect_sv = true;
 	ignore_dp = false;
 	clipped = false;
 	depth_bin = 1;
@@ -37,19 +40,29 @@ stk::Param::Param() {
 	seqp.setSeed((((int)min_clip / 4) - 1) * 4);
 	seqp.min_match = (int)min_clip * 3 / 4;
 	seqp.max_gap = 2;
-	seqp.max_miss = 2;
+	seqp.max_miss = 1;
 	seqp.ext_threshold = 0.75;
 }
 stk::Param::Param(slib::SDictionary& pref) : stk::Param() { set(pref); }
 stk::Param::~Param() {}
+/**
+* From app. preference
+*/
 void stk::Param::set(SDictionary &pref) {
+	// Set primary command
 	command = pref["_cmd_"];
+	// 
 	try {
+		/* Load external file */
 		if (pref["param"]) load(pref["param"]);
+		/* Set input BAM files */
 		if (pref["bam"]) {
+			/** BAM file(s) is/are available for 3 commands **/
 			if (command == "readinfo" || command == "summary" || command == "analyze") {
-				if (sfs::isDir(pref["bam"])) 
+				/*** Directory is set ***/
+				if (sfs::isDir(pref["bam"]))
 					inputs.append(SDirectory(pref["bam"]).fileList({ "bam" }));
+				/*** File(s) is/are set ***/
 				else {
 					auto bams = pref["bam"].split(",");
 					sforeach(in, bams) { if (sfs::exist(in)) inputs.add(in); }
@@ -57,10 +70,13 @@ void stk::Param::set(SDictionary &pref) {
 			}
 		}
 		if (pref["bsm"]) {
-			if (command == "depth" || command == "copynum" || command == "splitread" || 
-				command == "vsearch" || command == "integrate" || command == "subtract") {
-				if (sfs::isDir(pref["bsm"])) 
+			/** BSM file(s) is/are available for 5 commands **/
+			if (command == "depth" || command == "copynum" || command == "splitread" ||
+				command == "vsearch" || command == "integrate") {
+				/*** Directory is set ***/
+				if (sfs::isDir(pref["bsm"]))
 					inputs.append(SDirectory(pref["bsm"]).fileList({ "bsm" }));
+				/*** File(s) is/are set ***/
 				else {
 					auto bsms = pref["bsm"].split(",");
 					sforeach(in, bsms) { if (sfs::exist(in)) inputs.add(in); }
@@ -69,7 +85,7 @@ void stk::Param::set(SDictionary &pref) {
 		}
 		if (pref["vlist"]) {
 			if (command == "verify" || command == "merge" || command == "unique" || command == "common") {
-				if (sfs::isDir(pref["vlist"])) 
+				if (sfs::isDir(pref["vlist"]))
 					inputs.append(SDirectory(pref["vlist"]).fileList({ "txt", "tsv", "json", "vcf" }));
 				else {
 					auto vls = pref["vlist"].split(",");
@@ -77,6 +93,7 @@ void stk::Param::set(SDictionary &pref) {
 				}
 			}
 		}
+		/* Genome reference */
 		if (pref["reference"]) {
 			reference.load(pref["reference"]);
 			logger.log(S("Load reference data.") << LF <<
@@ -84,8 +101,10 @@ void stk::Param::set(SDictionary &pref) {
 				" > Total size: " << reference.total() << LF <<
 				" > Species: " << (reference.attribute.hasKey("species") ? reference.attribute["species"] : "") << LF <<
 				" > Version: " << (reference.attribute.hasKey("version") ? reference.attribute["version"] : ""));
+			/** Rock for async. process **/
 			mlock.resize(reference.size());
 		}
+
 		if (pref["annotdb"]) {
 			annotation = true;
 			annotdb.open(pref["annotdb"]);
@@ -93,28 +112,42 @@ void stk::Param::set(SDictionary &pref) {
 			logger.log(S("Load annotation dataset.") << LF <<
 				" > Version: " << (reference.attribute.hasKey("version") ? reference.attribute["version"] : ""));
 		}
+		/* Control BSM file */
 		if (pref["control"]) {
 			logger.log("Load control data.");
 			control.load(pref["control"]);
 		}
+		/* Control variant list */
 		if (pref["vcontrol"]) {
 			logger.log("Load control variants.");
 			vcontrol.load(pref["vcontrol"], &reference);
 		}
+		/* Target region */
 		if (pref["target"]) {
 			logger.log("Load target regions.");
 			loadTarget(pref["target"], target, reference);
 		}
-		if (pref["outdir"]) {
-			if (!sfs::exist(pref["outdir"])) sfs::makeDir(pref["outdir"]);
-			outdir = pref["outdir"];
+		/* Output path */
+		if (pref["output"] || pref["_out_"]) {
+			output = sfs::absolutePath(pref["output"] ? pref["output"] : pref["_out_"]);
+			oformat = sfs::extension(output);
+			outdir = sfs::splitPath(output).first;
 			if (!sfs::exist(outdir)) sfs::makeDir(outdir);
 		}
-		if (pref["oformat"]) oformat = pref["oformat"];
+		else {
+			if (pref["outdir"]) {
+				if (!sfs::exist(pref["outdir"])) sfs::makeDir(pref["outdir"]);
+				outdir = pref["outdir"];
+				if (!sfs::exist(outdir)) sfs::makeDir(outdir);
+			}
+			if (pref["oformat"]) oformat = pref["oformat"];
+		}
+		/* Options */
 		if (pref["paired"]) seqtype = sngs::SEQ_TYPE::PAIRED;
 		if (pref["async-load"]) async_load = true;
 		if (pref["detect-sv"]) detect_sv = true;
 		if (pref["ignore-pcrdp"]) ignore_dp = true;
+		if (pref["ignore-sv"]) detect_sv = false;
 		if (pref["clip-only"]) clipped = true;
 		if (pref["depth-bin"]) depth_bin = pref["depth-bin"];
 		if (pref["cliplen"]) min_clip = pref["cliplen"];
@@ -154,8 +187,14 @@ void stk::Param::set(SDictionary &pref) {
 		logger.log(ex);
 	}
 }
+/**
+* From ext. file (.json)
+*/
 void stk::Param::load(const char* path) { 
+	// Load JSON
 	auto pars = sjson::load(path);
+
+
 	seqtype = pars["paired"] ? sngs::SEQ_TYPE::PAIRED : sngs::SEQ_TYPE::SINGLE;
 	async_load = pars["async-load"] ? true : false;
 	detect_sv = pars["detect-sv"] ? true : false;
